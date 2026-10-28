@@ -15,6 +15,7 @@ import {
   EmptyState,
   ErrorState,
   LoadingSkeleton,
+  Pagination,
   Select,
   TabNav,
   Toast,
@@ -23,6 +24,8 @@ import {
 } from "@/shared/components";
 import { toErrorMessage, useAsyncData } from "@/shared/hooks/useAsyncData";
 import type { ModerationCaseItem } from "@/shared/types/governance";
+
+const PAGE_SIZE = 20;
 
 const QUEUE_TABS = [
   { key: "pending", label: "待确认" },
@@ -60,12 +63,14 @@ export function ApprovalCenterView() {
   const [confirming, setConfirming] = useState(false);
   const [toast, setToast] = useState<{ tone: ToastTone; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
 
   const state = useAsyncData(
-    () => fetchModerationCases({ status: activeTab, page: 1, page_size: 50 }),
-    [activeTab],
+    () => fetchModerationCases({ status: activeTab, page, page_size: PAGE_SIZE }),
+    [activeTab, page],
   );
   const cases = state.data?.items ?? [];
+  const total = state.data?.total ?? 0;
   // URL 定位的工单可能不在当前 Tab 列表内：此时提示回队列选择
   const selected: ModerationCaseItem | null =
     cases.find((item) => item.id === selectedId) ?? null;
@@ -102,7 +107,14 @@ export function ApprovalCenterView() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <section aria-label="审批队列" className="flex flex-col gap-3 lg:col-span-5">
-          <TabNav tabs={QUEUE_TABS} active={activeTab} onChange={setActiveTab} />
+          <TabNav
+            tabs={QUEUE_TABS}
+            active={activeTab}
+            onChange={(next) => {
+              setActiveTab(next);
+              setPage(1);
+            }}
+          />
           {state.isLoading ? <LoadingSkeleton variant="detail" count={3} /> : null}
           {state.error !== null ? (
             <ErrorState message={state.error} onRetry={state.reload} />
@@ -114,7 +126,8 @@ export function ApprovalCenterView() {
                 description="当前状态下没有待处理的审批工单。Agent 静默巡检发现中高风险内容时会自动创建。"
               />
             ) : (
-              <ul className="flex flex-col gap-2">
+              <>
+                <ul className="flex flex-col gap-2">
                 {cases.map((item) => (
                   <li key={item.id}>
                     <button
@@ -135,7 +148,11 @@ export function ApprovalCenterView() {
                     </button>
                   </li>
                 ))}
-              </ul>
+                </ul>
+                {total > PAGE_SIZE ? (
+                  <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
+                ) : null}
+              </>
             )
           ) : null}
         </section>

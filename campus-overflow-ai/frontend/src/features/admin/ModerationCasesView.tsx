@@ -11,10 +11,13 @@ import {
   EmptyState,
   ErrorState,
   LoadingSkeleton,
+  Pagination,
   Select,
   TabNav,
 } from "@/shared/components";
 import { useAsyncData } from "@/shared/hooks/useAsyncData";
+
+const PAGE_SIZE = 20;
 
 const STATUS_TABS = [
   { key: "pending", label: "待处理" },
@@ -40,15 +43,16 @@ const RISK_LABELS: Record<string, string> = {
 export function ModerationCasesView() {
   const [activeTab, setActiveTab] = useState("pending");
   const [source, setSource] = useState("all");
+  const [page, setPage] = useState(1);
 
   const state = useAsyncData(
     () => fetchModerationCases({
       status: activeTab,
       source: source === "all" ? undefined : source,
-      page: 1,
-      page_size: 50,
+      page,
+      page_size: PAGE_SIZE,
     }),
-    [activeTab, source],
+    [activeTab, source, page],
   );
 
   const cases = state.data?.items ?? [];
@@ -63,7 +67,10 @@ export function ModerationCasesView() {
           <Select
             label="来源"
             value={source}
-            onChange={(event) => setSource(event.target.value)}
+            onChange={(event) => {
+              setSource(event.target.value);
+              setPage(1);
+            }}
             options={[
               { value: "all", label: "全部来源" },
               { value: "agent", label: "Agent 发起" },
@@ -73,7 +80,14 @@ export function ModerationCasesView() {
         </div>
       </div>
 
-      <TabNav tabs={STATUS_TABS} active={activeTab} onChange={setActiveTab} />
+      <TabNav
+        tabs={STATUS_TABS}
+        active={activeTab}
+        onChange={(next) => {
+          setActiveTab(next);
+          setPage(1);
+        }}
+      />
 
       {state.isLoading ? <LoadingSkeleton variant="detail" count={3} /> : null}
       {state.error !== null ? (
@@ -131,7 +145,12 @@ export function ModerationCasesView() {
               description="当前筛选条件下没有审核工单。Agent 静默巡检发现中高风险内容时会自动创建。"
             />
           ) : (
-            <p className="text-[12px] text-ink-subtle">共 {total} 条</p>
+            <>
+              <p className="text-[12px] text-ink-subtle">共 {total} 条</p>
+              {total > PAGE_SIZE ? (
+                <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
+              ) : null}
+            </>
           )}
         </>
       ) : null}
