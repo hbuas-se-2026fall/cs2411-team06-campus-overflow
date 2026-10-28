@@ -169,6 +169,7 @@ export function AppealsAdminView() {
       {confirming !== null && (
         <ConfirmDialog
           open
+          busy={busy}
           danger
           title={`复核申诉 #${confirming.id}`}
           description={`撤销处置将同时恢复内容可见或解禁该用户，结果将通知当事人。${

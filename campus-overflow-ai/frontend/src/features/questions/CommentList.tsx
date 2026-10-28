@@ -216,6 +216,7 @@ export function CommentList({
 
       <ConfirmDialog
         open={deleteTarget !== null}
+        busy={pending}
         title="确认删除这条评论？"
         description="删除后普通用户不可见；若删除的是顶级评论，其下的回复会一并隐藏。"
         confirmLabel="确认删除"

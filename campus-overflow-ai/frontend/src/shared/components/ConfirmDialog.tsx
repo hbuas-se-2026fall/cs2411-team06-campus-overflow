@@ -10,6 +10,7 @@ export function ConfirmDialog({
   confirmLabel = "确认",
   cancelLabel = "取消",
   danger = false,
+  busy = false,
   onConfirm,
   onCancel,
 }: {
@@ -19,6 +20,8 @@ export function ConfirmDialog({
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  /** 请求进行中：禁用两个按钮并锁住 ESC，避免重复提交或中途关闭 */
+  busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -26,11 +29,11 @@ export function ConfirmDialog({
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onCancel();
+      if (event.key === "Escape" && !busy) onCancel();
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, onCancel]);
+  }, [open, onCancel, busy]);
 
   if (!open) return null;
 
@@ -51,18 +54,21 @@ export function ConfirmDialog({
             type="button"
             onClick={onCancel}
             autoFocus
-            className="co-focusable cursor-pointer rounded-md border border-line px-4 py-2 text-[13px] font-medium text-ink transition-colors duration-150 ease-standard hover:bg-panel"
+            disabled={busy}
+            className="co-focusable cursor-pointer rounded-md border border-line px-4 py-2 text-[13px] font-medium text-ink transition-colors duration-150 ease-standard hover:bg-panel disabled:cursor-not-allowed disabled:opacity-60"
           >
             {cancelLabel}
           </button>
           <button
             type="button"
             onClick={onConfirm}
+            disabled={busy}
+            aria-busy={busy}
             className={`co-focusable cursor-pointer rounded-md px-4 py-2 text-[13px] font-medium text-white transition-colors duration-150 ease-standard ${
               danger ? "bg-danger hover:opacity-90" : "bg-brand hover:bg-brand-strong"
-            }`}
+            } disabled:cursor-not-allowed disabled:opacity-60`}
           >
-            {confirmLabel}
+            {busy ? "处理中…" : confirmLabel}
           </button>
         </div>
       </div>

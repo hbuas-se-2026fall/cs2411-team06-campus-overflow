@@ -235,6 +235,7 @@ export function ApprovalCenterView() {
       {confirming && selected !== null ? (
         <ConfirmDialog
           open
+          busy={busy}
           danger
           title={`确认处置工单 #${selected.id}`}
           description={`将以「${decision}」执行处置，结果会通知当事人。${decision === "ban_temp" ? `封禁期限 ${durationDays} 天，到期自动解禁。` : ""}`}

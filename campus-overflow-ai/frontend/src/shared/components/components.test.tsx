@@ -72,6 +72,31 @@ describe("ConfirmDialog", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(2);
   });
+
+  it("busy 时：确认/取消禁用，ESC 不关闭（防重复提交与中途关闭）", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        busy
+        title="确认删除这条问题？"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    const confirm = screen.getByRole("button", { name: "处理中…" }) as HTMLButtonElement;
+    const cancel = screen.getByRole("button", { name: "取消" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(cancel.disabled).toBe(true);
+
+    fireEvent.click(confirm);
+    fireEvent.click(cancel);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
 });
 
 describe("StatusBadge / EmptyState", () => {
