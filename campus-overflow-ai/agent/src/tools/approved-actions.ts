@@ -14,7 +14,9 @@ export const ExecutionClaimSchema = z.object({
   execution_id: z.uuid(), request_id: z.uuid(), lease: z.string().min(20), lease_epoch: z.number().int().positive(),
   args_hash: z.string().regex(/^[a-f0-9]{64}$/), trace_id: z.string(),
   frozen_call: z.object({ contract: z.literal("approval-v2"), tool_name: z.literal("executeApprovedGovernance"),
-    request_id: z.uuid(), requester_id: z.number().int().positive(), expected_version: z.string(),
+    request_id: z.uuid(), requester_id: z.number().int().positive().nullable(), expected_version: z.string(),
+    workflow_task_id: z.uuid().optional(), workflow_round: z.number().int().min(1).max(5).optional(),
+    workflow_content_version: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     target_type: z.enum(["question", "answer", "comment", "user"]), target_id: z.number().int().positive(),
     action: z.enum(["hide", "delete", "warn", "ban", "ban_temp"]), reason: z.string(), duration_days: z.number().nullable(),
   }).strict(),
@@ -23,13 +25,19 @@ export type ExecutionClaim = z.infer<typeof ExecutionClaimSchema>;
 export const validateClaim = (raw: unknown): ExecutionClaim => {
   const claim = ExecutionClaimSchema.parse(raw);
   const call = claim.frozen_call;
+  if (call.requester_id === null
+    ? call.workflow_task_id === undefined || call.workflow_round === undefined
+    : call.workflow_task_id !== undefined || call.workflow_round !== undefined) {
+    throw new SecurityPolicyError("approval_source_mismatch");
+  }
   const canonical = JSON.stringify(Object.fromEntries(Object.entries(call).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)));
   if (call.request_id !== claim.request_id || createHash("sha256").update(canonical).digest("hex") !== claim.args_hash) {
     throw new SecurityPolicyError("approval_binding_mismatch");
   }
   return claim;
 };
-export const validateReceipt = (raw: unknown, claim: ExecutionClaim) => {
+export const validateReceipt = (raw: unknown, claim: Pick<ExecutionClaim,
+  "execution_id" | "request_id" | "case_id" | "approved_by" | "args_hash" | "frozen_call" | "trace_id">) => {
   const receipt = ExecutionReceiptSchema.parse(raw);
   if (receipt.execution_id !== claim.execution_id || receipt.request_id !== claim.request_id
     || receipt.case_id !== claim.case_id || receipt.approved_by !== claim.approved_by

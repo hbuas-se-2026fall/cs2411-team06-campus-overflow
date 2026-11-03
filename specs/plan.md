@@ -1,5 +1,49 @@
 # 技术方案（Plan）
 
+## 2026-11-03 巡检409与回调端口
+
+按docs/superpowers/plans/2026-11-03-patrol-conflicts-callback-ports.md实施。仅missing/deleted/hidden抛专用PatrolTargetUnavailableError并带白名单reason_code，其他409仍是未知冲突；全局错误适配仅为有原因码的异常增加可选字段，既有信封保持。Workflow客户端只解析根创建接口原因码，巡检仅跳过该类型。共享Nitro端口解析用于预加载与PG回调目标，保留标准AGENT_PORT/8787规则；直接产物按Nitro的NITRO_PORT/PORT/3000解析，不默默猜测Unix socket或动态监听端口。路由顺序及JWT不改，补真实HTTP与启动组合测试。
+
+## 2026-11-03 网络检索与Agent依赖升级
+
+用户已确认Tavily结构化搜索加agent-browser只读方案，并强调工具应共用基类契约、按权限继承。见docs/superpowers/specs/2026-11-03-web-retrieval-design.md及对应实施计划。searchWeb/readWebPage实现公共AgentTool，由统一请求级工具工厂装配，三角色继承公共只读能力，再由角色规则及任务类型裁剪，不在各端复制实现；请求闭包绑定已搜索URL。网页由固定DNS/有界响应的客户端获取，经一次性loopback桥接交agent-browser read提取，CLI无业务凭据或个人配置。Agent升Node24以满足浏览器依赖，Workflow/serde/World/AI SDK配套升级；原治理预算、审批及运行库边界不变。分块测试提交，全部验收后推送。
+
+## 2026-11-03 README现状整理与权限澄清
+
+整理根README、代码目录README和Agent入口说明，替换过期阶段描述，说明三服务/三种存储、管理端五轮Workflow、测试证据和生产限制。记录用户反馈CI/CD成功，不据此推断生产开关已启用。按用户同日进一步澄清，CHAT-01为学生回答前受控检索增强：白名单、角色与数据范围取交集，允许只读和网络检索，不开放写操作或自治理；撤回先前“零工具调用”的错误理解。main-context已有学生只读规则及回答前规划链路，网络检索接线和范围验收另行实施。本批仅文档，不修改运行行为或部署。
+
+## 2026-11-03 Agent Linux CI Rollup修复
+
+用户反馈4GB堆修复后依赖追踪完成，但Rollup渲染阶段出现空模块reexport。按docs/superpowers/plans/2026-11-03-agent-ci-rollup.md，用WSL2隔离Linux Node22及全新锁文件安装诊断具体模块，再修正最小打包边界并验证实际运行入口。保留运行资源追踪、全部检查和既有治理安全边界；不提交依赖源码补丁。
+
+Linux反例已定位Postgres World内部drizzle/index.js导入schema未关联。为该包增加noExternals统一打包，保留原traceDeps完整运行资源；未补丁Rollup的Linux正式构建、491项测试、Workflow/dev和源码目录外产物真实Postgres World冒烟均已通过。
+
+## 2026-11-02 Agent CI构建内存修复
+
+推送后用户反馈V8约2GB堆耗尽退出134。按docs/superpowers/plans/2026-11-02-agent-ci-heap.md核对本地与CI预算，为Agent job显式配置4GB V8堆并覆盖其构建/冒烟子进程；不改业务运行配置或跳过检查。
+
+## 2026-11-02 WF-05 六项缺陷修复
+
+依用户“修复1-6”授权，按docs/superpowers/plans/2026-11-02-workflow-six-fixes.md修复错误反馈与轮次、规划和冻结版本一致、异常根收尾、审批等待预算、业务发现持久分页及完整脱敏观察。保持后端最终授权、逐次批准和原回执语义；未知结果不另起动作，发现检查点不复制Postgres运行状态。
+
+## 2026-11-01 自治理 Workflow 增量方案
+
+2026-11-02连续批次：系统FrozenGovernanceCall允许requester_id=null且必须绑定workflow_task_id，管理员/平台原格式和hash保持兼容；系统身份不是管理员账号。后端按根内容目标派生处置目标（hide/delete为内容，warn/ban为该内容作者），审批和执行前重新校验绑定及当前批准人权限。旧claim仅领取非system_patrol任务，新claim限定根任务及申请。模型只提供动作/理由，不提供身份、执行租约或任意目标。执行租约在单个服务器步骤内领取/核对/执行，不作为步骤结果持久化；响应丢失按原申请回执核对。
+
+当前SDK start不支持原子hook，改由第一个持久step在后端行锁/CAS绑定唯一run；重复候选不能进入治理，已绑定根不另起loop。可能存在多个候选Run，后台补偿未绑定任务，不宣称只有一次start。每轮读取现状→WorkflowAgent提出有限动作（可多个）→逐次审批/执行→重新读取→独立模型评估，经WF-01决定下一轮。工具和活动时间累计跨轮，人工等待独立7天，最多5轮。World只接专用WORKFLOW_POSTGRES_URL，内部handler通过仅内网/loopback监听的专用反向代理转发，不信任客户端自报转发头；公网入口继续阻断内部handler。默认关闭，不连生产库。测试使用模型HTTP替身、临时MySQL/Postgres实例验证真实Workflow恢复，不把mock称真实模型验收。
+
+2026-11-02用户选择后台巡检自动发起。WF-03按独立审查块推进：A后端系统根任务创建/去重/只读查询；B系统来源冻结审批与执行所有权；C Postgres World与内部路由保护；D WorkflowAgent轮内模型及五轮编排。A新增patrol_workflow_tasks表，服务器生成task_id，target_type/target_id与后端实际state_version构成唯一来源键，固定source_kind=system_patrol；同事务创建无用户归属的AgentRun审计。每个根任务仅绑定一个内容目标，后续账号处置必须通过后端解析关联并单独授权，不能模型任意改目标。A不创建工单或执行任务，不改变旧worker领取，默认BACKEND_GOVERNANCE_WORKFLOW_ENABLED=false；不写入轮数副本，五轮状态以后由Workflow持久化，后台终态同版本不得另起任务绕过轮数限制。
+
+对应 WF-R01～06：保留 Hono、Node、FastAPI 和业务 MySQL；外层 Workflow 管持久生命周期，WorkflowAgent 管模型/工具交互。业务审批、授权、冻结调用、回执和幂等仍以 FastAPI 为真值源。当前 GL 首版“不引入 WorkflowAgent、只恢复确定性步骤”作为历史实施边界保留，新 WF 分期在此基础上扩展。
+
+1. WF-01 先交付纯状态转换契约：`agent/src/loop/governance-loop-state.ts`，严格校验服务器检查点与事件。根 task_id/trace_id、round、revision、等待关联与无进展次数可 JSON 序列化；只有带本轮新观察引用的 evaluate 事件可决定继续并递增 round。禁止用 `isStepCount(5)` 代表治理 5 轮。该模块不调用模型、工具或数据库，不作为授权凭证。
+2. 每个事件必须匹配当前 round/revision；重复或迟到事件拒绝，终态不能复活。人工批准恢复 acting 只表明可以由执行器复核，绝不授予模型执行高风险工具的能力。未知结果先转 verifying，原动作核对后恢复同轮；等待/核对均不重置轮数。连续两轮无进展转 needs_human。每轮独立工具调用和活动时间消耗由执行层累计，不通过重建 RunContext 清零。
+3. WF-02 接入 Workflow/Nitro 的 Hono 构建与启动、AI SDK 7 配套 `@ai-sdk/workflow`。2026-11-01 用户同意独立 PostgreSQL 作为流程状态/队列/必要恢复数据存储，MySQL 管业务真值、Markdown/Wiki 管知识，C-05已明确该例外。采用 workflow 5.2.3、@ai-sdk/workflow 2.0.91、ai 7.0.159、Nitro 3.0.261029-rc 与 Rollup 4.67.3；Node最低22.22.0。Nitro接管HTTP启动，运行plugin统一初始化并关闭知识目录/周报/巡检/旧治理worker/MCP，避免请求模块导入造成重复启动。保持8787和现有Hono接口；新Workflow入口默认关闭。先用隔离Local World做无模型无业务副作用的编译/步骤运行冒烟，生产Postgres接线与真实恢复另验，不将Local World当生产运行库。
+4. WF-03 将每轮读取/规划/工具/效果复读与评估接到状态契约，并用Workflow步骤保存转换结果；在专用测试环境配置Postgres World和内部handler访问保护，不部署到真实业务环境。模型只提出结构化判断，可信适配器只允许引用本轮真实观察；批准事件仅唤醒后端状态查询。高风险执行复用GL网关和后端冻结授权。新执行所有权与旧worker显式分流，同一任务不能由两套编排重复处置。
+5. WF-04 验证跨等待/重启/重试仍最多 5 轮、多动作一轮、未知先核对、撤权/审计失败阻断与重复事件；真实环境验收和发布单列。学生 ToolLoopAgent 迁移另做 CHAT-01，不混入治理首块，保留原课程范围/白名单/审计/来源检查。
+
+详细设计和 WF-01 可执行计划：`docs/superpowers/specs/2026-11-01-governance-workflow-design.md`、`docs/superpowers/plans/2026-11-01-governance-loop-state.md`。每块验证提交后按 AGENTS.md 人工审查；本轮未授权部署、真实治理或真实数据库迁移。
+
 ## 2026-10-29 GL治理工具Loop、安全Hooks与管理员服务端上下文（2026-10-30本地实施至GL-05）
 
 GL-01A已实现后端v2批准契约：新增 `/internal/agent/user/governance-requests/v2` 创建入口，以及 `/api/governance/approval-requests/{request_id}` 的GET和approve/reject。`BACKEND_GOVERNANCE_EXECUTOR_ENABLED`默认false，仅显式开启才接收v2申请。批准与唯一待执行任务同事务，旧resolve及内部决策均拒绝v2，过期/拒绝关闭关联待审工单。原v1保持原语义。GL-01B的真实隔离MySQL验收仍待环境，见GL-01验证记录。

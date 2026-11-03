@@ -21,6 +21,8 @@ from app.modules.governance.models import (
     GovernanceApprovalRequest,
     GovernanceExecutionJob,
     ModerationCase,
+    PatrolWorkflowScan,
+    PatrolWorkflowTask,
     ToolCallLog,
 )
 from app.modules.governance.schemas import (
@@ -36,6 +38,7 @@ from app.modules.governance.schemas_executions import GovernanceApprovalRecord, 
 from app.modules.governance.schemas_experiences import ExperienceOut
 from app.modules.governance.schemas_learning import LearningEventOut, TrustedTagSourceOut
 from app.modules.governance.schemas_roles import ClassChangeOut
+from app.modules.governance.schemas_workflow import PatrolWorkflowOut
 
 
 def get_governance_approval(
@@ -105,7 +108,11 @@ def finish_governance_execution(db: Session, execution_id: str, receipt: dict) -
 
 
 def claim_candidates(db: Session) -> list[str]:
-    rows = db.query(GovernanceExecutionJob.execution_id).filter(
+    rows = db.query(GovernanceExecutionJob.execution_id).join(
+        GovernanceApprovalRequest,
+        GovernanceExecutionJob.request_id == GovernanceApprovalRequest.request_id,
+    ).filter(
+        GovernanceApprovalRequest.source_kind != "system_patrol",
         GovernanceExecutionJob.state.in_(["queued", "claimed", "completed"]),
         GovernanceExecutionJob.continuation.is_(None),
     ).order_by(
@@ -255,6 +262,44 @@ def finish_approval_wait(db: Session, request_id: str, state: str, result: dict)
     row = db.get(ApprovalWait, request_id)
     row.state, row.result = state, result
     db.flush()
+
+
+def get_patrol_workflow_task(
+    db: Session, *, source_key: str | None = None, task_id: str | None = None,
+    for_update: bool = False,
+) -> PatrolWorkflowOut | None:
+    query = db.query(PatrolWorkflowTask)
+    query = (query.filter_by(source_key=source_key) if source_key
+             else query.filter_by(task_id=task_id))
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    row = query.first()
+    return PatrolWorkflowOut.model_validate(row) if row else None
+
+
+def list_unbound_patrol_tasks(db: Session) -> list[PatrolWorkflowOut]:
+    rows = db.query(PatrolWorkflowTask).filter_by(status="active", workflow_run_id=None).limit(100)
+    return [PatrolWorkflowOut.model_validate(row) for row in rows]
+
+
+def update_patrol_task(db: Session, task_id: str, **values) -> PatrolWorkflowOut:
+    row = db.get(PatrolWorkflowTask, task_id)
+    for name, value in values.items():
+        setattr(row, name, value)
+    db.flush()
+    return PatrolWorkflowOut.model_validate(row)
+
+
+def create_patrol_workflow_task(
+    db: Session, source_key: str, task: PatrolWorkflowOut,
+) -> PatrolWorkflowOut:
+    row = PatrolWorkflowTask(
+        **task.model_dump(exclude={"repeat", "task_id"}), task_id=str(task.task_id),
+        source_key=source_key,
+    )
+    db.add(row)
+    db.flush()
+    return PatrolWorkflowOut.model_validate(row)
 
 
 def create_run(
@@ -661,3 +706,31 @@ def decide_experience(db: Session, row_id: int, status: str, teacher_id: int) ->
     row.reviewed_at = datetime.now()
     db.flush()
     return ExperienceOut.model_validate(row)
+
+
+def patrol_tasks_page(db: Session, after: str | None, limit: int, scope: str):
+    query = db.query(PatrolWorkflowTask).filter_by(status="active")
+    if scope == "unbound":
+        query = query.filter(PatrolWorkflowTask.workflow_run_id.is_(None))
+    if after:
+        query = query.filter(PatrolWorkflowTask.task_id > after)
+    rows = query.order_by(PatrolWorkflowTask.task_id).limit(limit + 1).all()
+    return [PatrolWorkflowOut.model_validate(row) for row in rows[:limit]], len(rows) > limit
+
+
+
+def get_patrol_scan(db: Session) -> dict:
+    row = (db.query(PatrolWorkflowScan).filter_by(scan_id="contents")
+           .with_for_update().populate_existing().first())
+    if row is None:
+        row = PatrolWorkflowScan(scan_id="contents", revision=0, state={"cursor": None})
+        db.add(row)
+        db.flush()
+    return {"revision": row.revision, "state": row.state}
+
+
+
+def save_patrol_scan(db: Session, state: dict, revision: int) -> None:
+    row = db.get(PatrolWorkflowScan, "contents")
+    row.state, row.revision = state, revision
+    db.flush()

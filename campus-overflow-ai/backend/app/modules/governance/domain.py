@@ -216,6 +216,12 @@ class CaseTargetNotReadyError(DomainError):
     http_status = 409
 
 
+class PatrolTargetUnavailableError(CaseTargetNotReadyError):
+    """巡检内容明确不存在、已隐藏或已软删除。"""
+
+    reason_code = "patrol_target_unavailable"
+
+
 class DecisionNotFoundError(DomainError):
     """Agent 决策未找到。"""
 
@@ -285,6 +291,15 @@ _AUDIT_SECRET = re.compile(
     r'''authorization|cookie|session[_-]?id|密码|口令|密钥|凭证)["']?\s*[=:：]\s*)'''
     r'''(?:"[^"]*"|'[^']*'|[^\s,;&]+)''', re.I,
 )
+
+
+def redact_workflow_text(value: str) -> str:
+    masked = _PRIVATE_KEY.sub("[REDACTED_PRIVATE_KEY]", value)
+    masked = _BEARER.sub("Bearer [REDACTED]", masked)
+    masked = _AUDIT_SECRET.sub(r"\1[REDACTED]", masked)
+    masked = re.sub(r"(?<!\d)1[3-9]\d{9}(?!\d)", "[REDACTED_PHONE]", masked)
+    masked = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[REDACTED_EMAIL]", masked)
+    return masked
 
 
 def audit_summary(value: str | None) -> str | None:

@@ -267,13 +267,43 @@ class ClassChangeRequest(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+class PatrolWorkflowScan(Base):
+    """业务发现进度及待确认页；不保存Workflow轮次或运行状态。"""
+
+    __tablename__ = "patrol_workflow_scans"
+    scan_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    state: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+
+class PatrolWorkflowTask(Base):
+    """系统巡检根任务；固定范围与审计，不代表获批执行授权。"""
+
+    __tablename__ = "patrol_workflow_tasks"
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    workflow_run_id: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    stop_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    source_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    initial_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("agent_runs.agent_run_id"), nullable=False, unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class GovernanceApprovalRequest(Base):
     """v2批准记录；与旧工单状态分离，不保存用户JWT。"""
     __tablename__ = "governance_approval_requests"
     request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     case_id: Mapped[int] = mapped_column(Integer, ForeignKey("moderation_cases.id"), unique=True)
     contract_version: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
-    requester_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    requester_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     source_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     source_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     frozen_call: Mapped[dict] = mapped_column(JSON, nullable=False)
