@@ -307,7 +307,8 @@ def list_user_answers(
             body=answer.body, vote_score=answer.vote_score,
             is_accepted=answer.id == accepted_answer_id,
             recommended_by_assistant=answer.recommended_by_assistant,
-            certified_by_teacher=answer.certified_by_teacher, created_at=answer.created_at,
+            certified_by_teacher=answer.certified_by_teacher,
+            certified_by_assistant=answer.certified_by_assistant, created_at=answer.created_at,
         )
         for answer, title, accepted_answer_id in rows
     ]
@@ -362,12 +363,17 @@ def set_recommend_flag(db: Session, answer_id: int, recommended: bool) -> None:
     db.flush()
 
 
-def set_certified_flag(db: Session, answer_id: int, certified: bool) -> None:
-    """教师优质内容认证写入（D9 定案：POST 置位 / DELETE 取消）。"""
+def set_certified_flag(
+    db: Session, answer_id: int, certified: bool, *, source: str = "teacher",
+) -> None:
+    """认证来源独立置位，不覆盖另一来源或助教推荐。"""
     answer = db.get(Answer, answer_id)
     if answer is None:
         raise domain.AnswerNotFoundError()
-    answer.certified_by_teacher = certified
+    if source == "assistant":
+        answer.certified_by_assistant = certified
+    else:
+        answer.certified_by_teacher = certified
     db.flush()
 
 
@@ -655,13 +661,16 @@ _MOD_MODELS = {"question": Question, "answer": Answer, "comment": Comment}
 
 #获取治理目标ORM行
 def moderation_get_target(
-    db: Session, target_type: str, target_id: int
+    db: Session, target_type: str, target_id: int, *, for_update: bool = False,
 ) -> Question | Answer | Comment | None:
     """探针取治理目标 ORM 行（含已软删/已隐藏，状态由调用方判定）。"""
     model = _MOD_MODELS.get(target_type)
     if model is None:
         return None
-    return db.query(model).filter(model.id == target_id).first()
+    query = db.query(model).filter(model.id == target_id)
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    return query.first()
 
 # 正文与可见性在同一查询中读取，避免只检查目标自身而泄漏不可见父级的下属内容。
 def moderation_get_content(
@@ -773,7 +782,12 @@ def moderation_restore_deleted(db: Session, target_type: str, target_id: int) ->
 
 #全站新内容巡检清单（US-13 静默检测，T-15-B）
 def list_patrol_contents(
-    db: Session, created_from: datetime, limit: int
+    db: Session,
+    created_from: datetime | None,
+    limit: int,
+    *,
+    after_type: str | None = None,
+    after_id: int | None = None,
 ) -> list[PatrolContentItem]:
     """全站时间窗内新内容（问题/回答/评论合并）：软删/隐藏排除，作者与课程归属随行。
 
@@ -783,50 +797,77 @@ def list_patrol_contents(
     # 评论两路课程归属需要两个独立的 Question 别名（父问题 / 父回答的问题）
     patrol_question = aliased(Question)
     patrol_question_via_answer = aliased(Question)
-    rows = db.query(
-        literal("question").label("target_type"),
-        Question.id.label("target_id"),
-        Question.body.label("body"),
-        Question.author_id.label("author_id"),
-        Question.course_id.label("course_id"),
-    ).filter(
-        Question.deleted_at.is_(None), Question.is_hidden.is_(False),
-        Question.created_at >= created_from,
-    ).union_all(
+    rows = (
         db.query(
-            literal("answer"),
-            Answer.id,
-            Answer.body,
-            Answer.author_id,
-            Question.course_id,
-        ).join(Question, Question.id == Answer.question_id).filter(
-            Answer.deleted_at.is_(None), Answer.is_hidden.is_(False),
-            Question.deleted_at.is_(None), Question.is_hidden.is_(False),
-            Answer.created_at >= created_from,
-        ),
-        db.query(
-            literal("comment"),
-            Comment.id,
-            Comment.body,
-            Comment.author_id,
-            func.coalesce(patrol_question.course_id, patrol_question_via_answer.course_id),
-        ).join(
-            patrol_question,
-            patrol_question.id == Comment.question_id,
-            isouter=True,
-        ).join(
-            Answer,
-            Answer.id == Comment.answer_id,
-            isouter=True,
-        ).join(
-            patrol_question_via_answer,
-            patrol_question_via_answer.id == Answer.question_id,
-            isouter=True,
-        ).filter(
-            Comment.deleted_at.is_(None), Comment.is_hidden.is_(False),
-            Comment.created_at >= created_from,
-        ),
-    ).order_by(desc("target_id")).limit(limit).all()
+            literal("question").label("target_type"),
+            Question.id.label("target_id"),
+            Question.body.label("body"),
+            Question.author_id.label("author_id"),
+            Question.course_id.label("course_id"),
+        )
+        .filter(
+            Question.deleted_at.is_(None),
+            Question.is_hidden.is_(False),
+            Question.created_at >= created_from if created_from else literal(True),
+        )
+        .union_all(
+            db.query(
+                literal("answer"),
+                Answer.id,
+                Answer.body,
+                Answer.author_id,
+                Question.course_id,
+            )
+            .join(Question, Question.id == Answer.question_id)
+            .filter(
+                Answer.deleted_at.is_(None),
+                Answer.is_hidden.is_(False),
+                Question.deleted_at.is_(None),
+                Question.is_hidden.is_(False),
+                Answer.created_at >= created_from if created_from else literal(True),
+            ),
+            db.query(
+                literal("comment"),
+                Comment.id,
+                Comment.body,
+                Comment.author_id,
+                func.coalesce(patrol_question.course_id, patrol_question_via_answer.course_id),
+            )
+            .join(
+                patrol_question,
+                patrol_question.id == Comment.question_id,
+                isouter=True,
+            )
+            .join(
+                Answer,
+                Answer.id == Comment.answer_id,
+                isouter=True,
+            )
+            .join(
+                patrol_question_via_answer,
+                patrol_question_via_answer.id == Answer.question_id,
+                isouter=True,
+            )
+            .filter(
+                Comment.deleted_at.is_(None),
+                Comment.is_hidden.is_(False),
+                Comment.created_at >= created_from if created_from else literal(True),
+            ),
+        )
+    )
+    if created_from is None:
+        candidates = rows.subquery()
+        rows = db.query(candidates)
+        if after_type is not None and after_id is not None:
+            rows = rows.filter(
+                or_(
+                    candidates.c.target_type > after_type,
+                    and_(candidates.c.target_type == after_type, candidates.c.target_id > after_id),
+                )
+            )
+        rows = rows.order_by("target_type", "target_id").limit(limit).all()
+    else:
+        rows = rows.order_by(desc("target_id")).limit(limit).all()
     return [
         PatrolContentItem(
             target_type=row.target_type,

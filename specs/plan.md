@@ -1,5 +1,110 @@
 # 技术方案（Plan）
 
+## 2026-11-03 巡检409与回调端口
+
+按docs/superpowers/plans/2026-11-03-patrol-conflicts-callback-ports.md实施。仅missing/deleted/hidden抛专用PatrolTargetUnavailableError并带白名单reason_code，其他409仍是未知冲突；全局错误适配仅为有原因码的异常增加可选字段，既有信封保持。Workflow客户端只解析根创建接口原因码，巡检仅跳过该类型。共享Nitro端口解析用于预加载与PG回调目标，保留标准AGENT_PORT/8787规则；直接产物按Nitro的NITRO_PORT/PORT/3000解析，不默默猜测Unix socket或动态监听端口。路由顺序及JWT不改，补真实HTTP与启动组合测试。
+
+## 2026-11-03 网络检索与Agent依赖升级
+
+用户已确认Tavily结构化搜索加agent-browser只读方案，并强调工具应共用基类契约、按权限继承。见docs/superpowers/specs/2026-11-03-web-retrieval-design.md及对应实施计划。searchWeb/readWebPage实现公共AgentTool，由统一请求级工具工厂装配，三角色继承公共只读能力，再由角色规则及任务类型裁剪，不在各端复制实现；请求闭包绑定已搜索URL。网页由固定DNS/有界响应的客户端获取，经一次性loopback桥接交agent-browser read提取，CLI无业务凭据或个人配置。Agent升Node24以满足浏览器依赖，Workflow/serde/World/AI SDK配套升级；原治理预算、审批及运行库边界不变。分块测试提交，全部验收后推送。
+
+## 2026-11-03 README现状整理与权限澄清
+
+整理根README、代码目录README和Agent入口说明，替换过期阶段描述，说明三服务/三种存储、管理端五轮Workflow、测试证据和生产限制。记录用户反馈CI/CD成功，不据此推断生产开关已启用。按用户同日进一步澄清，CHAT-01为学生回答前受控检索增强：白名单、角色与数据范围取交集，允许只读和网络检索，不开放写操作或自治理；撤回先前“零工具调用”的错误理解。main-context已有学生只读规则及回答前规划链路，网络检索接线和范围验收另行实施。本批仅文档，不修改运行行为或部署。
+
+## 2026-11-03 Agent Linux CI Rollup修复
+
+用户反馈4GB堆修复后依赖追踪完成，但Rollup渲染阶段出现空模块reexport。按docs/superpowers/plans/2026-11-03-agent-ci-rollup.md，用WSL2隔离Linux Node22及全新锁文件安装诊断具体模块，再修正最小打包边界并验证实际运行入口。保留运行资源追踪、全部检查和既有治理安全边界；不提交依赖源码补丁。
+
+Linux反例已定位Postgres World内部drizzle/index.js导入schema未关联。为该包增加noExternals统一打包，保留原traceDeps完整运行资源；未补丁Rollup的Linux正式构建、491项测试、Workflow/dev和源码目录外产物真实Postgres World冒烟均已通过。
+
+## 2026-11-02 Agent CI构建内存修复
+
+推送后用户反馈V8约2GB堆耗尽退出134。按docs/superpowers/plans/2026-11-02-agent-ci-heap.md核对本地与CI预算，为Agent job显式配置4GB V8堆并覆盖其构建/冒烟子进程；不改业务运行配置或跳过检查。
+
+## 2026-11-02 WF-05 六项缺陷修复
+
+依用户“修复1-6”授权，按docs/superpowers/plans/2026-11-02-workflow-six-fixes.md修复错误反馈与轮次、规划和冻结版本一致、异常根收尾、审批等待预算、业务发现持久分页及完整脱敏观察。保持后端最终授权、逐次批准和原回执语义；未知结果不另起动作，发现检查点不复制Postgres运行状态。
+
+## 2026-11-01 自治理 Workflow 增量方案
+
+2026-11-02连续批次：系统FrozenGovernanceCall允许requester_id=null且必须绑定workflow_task_id，管理员/平台原格式和hash保持兼容；系统身份不是管理员账号。后端按根内容目标派生处置目标（hide/delete为内容，warn/ban为该内容作者），审批和执行前重新校验绑定及当前批准人权限。旧claim仅领取非system_patrol任务，新claim限定根任务及申请。模型只提供动作/理由，不提供身份、执行租约或任意目标。执行租约在单个服务器步骤内领取/核对/执行，不作为步骤结果持久化；响应丢失按原申请回执核对。
+
+当前SDK start不支持原子hook，改由第一个持久step在后端行锁/CAS绑定唯一run；重复候选不能进入治理，已绑定根不另起loop。可能存在多个候选Run，后台补偿未绑定任务，不宣称只有一次start。每轮读取现状→WorkflowAgent提出有限动作（可多个）→逐次审批/执行→重新读取→独立模型评估，经WF-01决定下一轮。工具和活动时间累计跨轮，人工等待独立7天，最多5轮。World只接专用WORKFLOW_POSTGRES_URL，内部handler通过仅内网/loopback监听的专用反向代理转发，不信任客户端自报转发头；公网入口继续阻断内部handler。默认关闭，不连生产库。测试使用模型HTTP替身、临时MySQL/Postgres实例验证真实Workflow恢复，不把mock称真实模型验收。
+
+2026-11-02用户选择后台巡检自动发起。WF-03按独立审查块推进：A后端系统根任务创建/去重/只读查询；B系统来源冻结审批与执行所有权；C Postgres World与内部路由保护；D WorkflowAgent轮内模型及五轮编排。A新增patrol_workflow_tasks表，服务器生成task_id，target_type/target_id与后端实际state_version构成唯一来源键，固定source_kind=system_patrol；同事务创建无用户归属的AgentRun审计。每个根任务仅绑定一个内容目标，后续账号处置必须通过后端解析关联并单独授权，不能模型任意改目标。A不创建工单或执行任务，不改变旧worker领取，默认BACKEND_GOVERNANCE_WORKFLOW_ENABLED=false；不写入轮数副本，五轮状态以后由Workflow持久化，后台终态同版本不得另起任务绕过轮数限制。
+
+对应 WF-R01～06：保留 Hono、Node、FastAPI 和业务 MySQL；外层 Workflow 管持久生命周期，WorkflowAgent 管模型/工具交互。业务审批、授权、冻结调用、回执和幂等仍以 FastAPI 为真值源。当前 GL 首版“不引入 WorkflowAgent、只恢复确定性步骤”作为历史实施边界保留，新 WF 分期在此基础上扩展。
+
+1. WF-01 先交付纯状态转换契约：`agent/src/loop/governance-loop-state.ts`，严格校验服务器检查点与事件。根 task_id/trace_id、round、revision、等待关联与无进展次数可 JSON 序列化；只有带本轮新观察引用的 evaluate 事件可决定继续并递增 round。禁止用 `isStepCount(5)` 代表治理 5 轮。该模块不调用模型、工具或数据库，不作为授权凭证。
+2. 每个事件必须匹配当前 round/revision；重复或迟到事件拒绝，终态不能复活。人工批准恢复 acting 只表明可以由执行器复核，绝不授予模型执行高风险工具的能力。未知结果先转 verifying，原动作核对后恢复同轮；等待/核对均不重置轮数。连续两轮无进展转 needs_human。每轮独立工具调用和活动时间消耗由执行层累计，不通过重建 RunContext 清零。
+3. WF-02 接入 Workflow/Nitro 的 Hono 构建与启动、AI SDK 7 配套 `@ai-sdk/workflow`。2026-11-01 用户同意独立 PostgreSQL 作为流程状态/队列/必要恢复数据存储，MySQL 管业务真值、Markdown/Wiki 管知识，C-05已明确该例外。采用 workflow 5.2.3、@ai-sdk/workflow 2.0.91、ai 7.0.159、Nitro 3.0.261029-rc 与 Rollup 4.67.3；Node最低22.22.0。Nitro接管HTTP启动，运行plugin统一初始化并关闭知识目录/周报/巡检/旧治理worker/MCP，避免请求模块导入造成重复启动。保持8787和现有Hono接口；新Workflow入口默认关闭。先用隔离Local World做无模型无业务副作用的编译/步骤运行冒烟，生产Postgres接线与真实恢复另验，不将Local World当生产运行库。
+4. WF-03 将每轮读取/规划/工具/效果复读与评估接到状态契约，并用Workflow步骤保存转换结果；在专用测试环境配置Postgres World和内部handler访问保护，不部署到真实业务环境。模型只提出结构化判断，可信适配器只允许引用本轮真实观察；批准事件仅唤醒后端状态查询。高风险执行复用GL网关和后端冻结授权。新执行所有权与旧worker显式分流，同一任务不能由两套编排重复处置。
+5. WF-04 验证跨等待/重启/重试仍最多 5 轮、多动作一轮、未知先核对、撤权/审计失败阻断与重复事件；真实环境验收和发布单列。学生 ToolLoopAgent 迁移另做 CHAT-01，不混入治理首块，保留原课程范围/白名单/审计/来源检查。
+
+详细设计和 WF-01 可执行计划：`docs/superpowers/specs/2026-11-01-governance-workflow-design.md`、`docs/superpowers/plans/2026-11-01-governance-loop-state.md`。每块验证提交后按 AGENTS.md 人工审查；本轮未授权部署、真实治理或真实数据库迁移。
+
+## 2026-10-29 GL治理工具Loop、安全Hooks与管理员服务端上下文（2026-10-30本地实施至GL-05）
+
+GL-01A已实现后端v2批准契约：新增 `/internal/agent/user/governance-requests/v2` 创建入口，以及 `/api/governance/approval-requests/{request_id}` 的GET和approve/reject。`BACKEND_GOVERNANCE_EXECUTOR_ENABLED`默认false，仅显式开启才接收v2申请。批准与唯一待执行任务同事务，旧resolve及内部决策均拒绝v2，过期/拒绝关闭关联待审工单。原v1保持原语义。GL-01B的真实隔离MySQL验收仍待环境，见GL-01验证记录。
+
+GL-02A已提供 `/internal/agent/governance-executions/{execution_id}/execute` 和同路径GET状态查询。普通服务凭证之外，必须持有独立的 `BACKEND_GOVERNANCE_EXECUTOR_TOKEN`、该任务有效lease及epoch；执行请求不能重传动作或身份。锁定批准、任务、当前管理员和目标，复用只flush的处置用例，业务/通知/必需审计/回执同事务提交。已有回执直接返回；未执行的失效授权转blocked/invalidated。GL-04已接后端claim/report与后台执行器，240秒租约、epoch隔离、最多3次领取及2/5/10秒有限核对；GL-05已接高风险冻结清单弹窗、批准/拒绝/取消及独立执行状态。新旧v1/v2隔离，普通服务凭证不授予执行权限。GL-02B真实MySQL并发仍待专用空库，不能将本地SQLite结果当作该项验收。
+
+用户批准5项建议：后端持久审批/任务与后台执行器、首批仅迁移治理执行、单次冻结调用授权、确定性续接、版本化旧工单兼容。高风险调用必须管理员弹窗批准后放行。后端保存批准授权和短期租约，不长期保存管理员JWT；工具网关统一安全hooks，后端继续最终授权和原子幂等执行。详细计划见 docs/superpowers/plans/2026-10-29-governance-loop-security-hooks.md。
+
+GL-07已提供FastAPI管理的服务器私有文件目录：admin按账号，platform按稳定客户端UUID与账号分树；与教材及公开静态目录分开。来源由后端认证派生，不能由客户端自报；管理员全站业务权限不开放他人或中台私聊。文件锁、版本比较、原子替换和删除墓碑共同防止覆盖或迟到响应恢复；管理员聊天与渐进式记忆从服务器读取。学生/教师仍用浏览器；旧管理员数据须预览确认后导入。需配置BACKEND_PRIVATE_CONTEXT_ROOT及中台映射的client_id，未配置时明确不可用。结构化治理仍在数据库，新执行器默认关闭；真实运行与部署验收归GL-06。
+
+## 2026-10-29 管理员继承教师权限
+
+统一 admin→teacher 角色继承，保留对象级校验：教师只本人课程，管理员全站课程。角色工具、默认主规则、后端管理用例和界面入口同时修订；不提供模型确认工具。外部管理员凭证只可经受控内部接口提议/读取，不替代人类JWT确认。详细计划见 docs/superpowers/plans/2026-10-29-admin-inheritance.md，无新表/迁移。
+
+## 2026-10-29 角色能力与实施收口
+
+学生只问答（内部读取/检索），教师可提出本人班级名单变更与回答经验建议，管理员可提出治理状态变更。模型工具只建申请/读结果，确认接口不注册；负责教师/人类管理员分别经后端真实身份确认。名单快照冻结课程和学生状态，确认前复核，名单+执行审计+申请终态同事务；重复确认只读终态。正文/账号资料编辑不在本批。方案见 docs/superpowers/plans/2026-10-29-role-tools.md；验证与配置见 docs/Agent层验证记录/2026-10-29增量收口.md。
+
+## 2026-10-28 连续收口批次
+
+用户明确授权连续实现至 TW-02，批末集中审查，逐块测试与提交保持。详细方案与待确认决策见 docs/superpowers/plans/2026-10-28-agent-completion.md。AP-03 采用后端等待表关联申请和工单，创建即返回，resume 只原子消费后端已执行结果并反馈，不再次执行治理；取消/过期只终止续接。AX-S 浏览器账号命名空间保存会话，个人记忆三阶段读取不进规划/审计。其余模块沿既有明确需求和各独立计划实施。
+
+## 2026-10-28 AX 增量实施方向
+
+依据 AX-R01～07 与三份设计记录，沿用现有技术栈，不整体迁移 Agent 框架。
+
+1. 知识资料采用本地 Markdown 文件夹；文档标识+内容哈希+处理配置版本检测变化，增量重建受影响目录，周期性全量核对删除/漏事件，完成后原子发布快照。资料及权限由后端白名单接口提供给 Agent，不把个人记忆写入共享目录；尚未选定 embedding 具体型号及重排模型。
+2. 会话由“＋”创建逻辑会话，不新建 OS 线程。持久会话标识与单次 run_id 分离；个人浏览器记忆按索引/摘要/详情三层披露。会话持久化方式和具体披露协议在相应任务前定案。
+3. 匿名学习事件单独记录课程、经验证的问题概括、真实标签/知识点与事件去重标识；公开题目可关联真实 ID。禁止上传私人记忆/聊天原文给教师。该事件与原有 TW-R01 公开问题计数分开口径；课程归属与可靠匿名化策略在实现前定案。
+4. 教材/教师维护标签必须有可核验来源，不能将现有任意 custom 标签直接视为可信。先建立词表来源契约，再在召回、模型输出和周报边界校验 ID、有效状态及课程范围；模型新标签不直接落库。
+5. approvals 经现有后端工单协调。首块 AP-01 新增仅服务凭证+真实管理员登录可读的治理现状接口；不执行、不建单、不更新目标。后续预览、持久等待、恢复分别实现，沿用后端真实处置接口；读取 executed 后不重放动作。现有人工等待与 180 秒执行预算需要独立建模，不能长挂 HTTP。
+6. MCP 专属密钥映射后端可验证管理员主体，查询/执行均查当前有效身份和权限。现有 name/scopes 配置不等于管理员映射。服务凭证、外部密钥和人工审批各自职责独立，不能复用一个布尔值替代；实现前确定密钥管理与映射协议，不在本批静默提升全部旧客户端权限。
+
+首块可执行计划：docs/superpowers/plans/2026-10-28-approvals-preflight.md；AP-01 只覆盖 AX-R05 的只读现状基础，不宣称完成全部 AX 或完整 approvals。
+
+### AP-02B：冻结动作的幂等持久申请（2026-10-28）
+
+AP-01 状态接口增加 include_version 可选参数，缺省保持原响应；显式请求时返回 state_version（目标类型/ID及当前相关字段的 SHA-256）。内容包含标题、正文、归属和隐藏/删除状态，不包含浏览/投票等计数；用户包含角色、账号/认证/封禁状态，不含邮箱与密码。版本读取仍无写入。Agent 预览请求版本并返回，缺失或不合法版本不输出可申请预览。
+
+新增 POST /internal/agent/user/governance-requests 与 POST /agent/approvals/requests，双凭证+当前管理员校验。严格请求包含 request_id UUID、expected_version、target/action/reason 与限时期限；重复使用相同 request_id 和内容返回同一工单，改参数/换管理员复用返回 409。使用已有 agent_runs.agent_run_id 唯一约束，键 approval-{request_id}，与工单、管理员通知同事务提交；申请 run 成功表示建单成功，不表示治理执行。无需新增表或迁移。
+
+后端先锁定目标复核版本和状态，冻结 snapshot 的 contract/request_id/requester_id/target/action/duration/version，创建 pending 工单并通知管理员。执行入口锁定工单，针对 approval- 命名运行的工单严格解析冻结快照；除 skip 拒绝外，动作、期限或版本变化均 409，必须重新预览申请。目标行锁覆盖版本核对和处置，工单行锁约束同工单并发执行；SQLite 只验证功能，MySQL 锁语义需专库验证。旧工单无此契约，沿用既有状态机。
+
+本块不提供挂起后的自动续接、不开放高风险子 Agent 工具，不改 MCP 身份映射；这些仍归 AP-03/AX-M。Agent 新路由只提交申请，后端内部响应必须匹配请求目标、动作及幂等 ID，错误与 409 脱敏返回。
+
+### AP-02A：Agent 管理员治理预览
+
+用户“继续完成”承接 AP-01。本块将 AP-02 拆成 A 只读预览、B 持久申请两个独立验证单元，不在预览中执行处置或伪造等待状态。POST /agent/approvals/preview 经现有用户中间件取得后端 principal，程序要求 admin；输入严格校验 target_type/target_id/action/reason 与 ban_temp 的 duration_days（缺省 7，1～30，仅该动作可带）。hide/delete 仅对内容，ban/ban_temp/warn 仅对用户，禁止任意工具或角色字段。
+
+UserInternalClient 新增 fetchGovernanceTargetState，固定走 AP-01 双凭证 user 路径，校验信封、类型/状态组合和响应目标一致，不回退服务权限。approvals/types.ts 定义契约，policy.ts 判断动作/目标和现状，preview.ts 只组装后端事实与拟动作影响，routes/approvals.ts 注册入口。响应含 target_type/target_id/current_state、action/reason、必要期限、effect、can_request_approval、blocked_reason（适用时）、requires_confirmation=true、executed=false 与 trace_id。不是执行授权或可复用审批令牌。
+
+ready 内容可建议 hide/delete，hidden 仅可建议 delete，deleted/missing 阻止；active 用户可提交 ban/ban_temp/warn 建议，banned/missing 阻止。该判断仅为状态层预览，不替代后端完整角色保护与执行校验。无模型、无 run/audit 写请求，追踪沿用请求 trace 与后端调用日志；不将读请求伪记为治理执行。预览变化后须重新读取，AP-02B 再设计冻结参数/状态版本及建单，不直接复用无版本预览执行。
+
+先通过真实 app+真实 internal-client+mock 后端编写反例，覆盖角色拒绝、非法动作/参数、状态与目标伪造、后端撤权、仅 GET 后端且模型零调用；相关工具/认证/集成回归、tsc/eslint。无后端结构变化和迁移。代码依据 AGENTS、AX-R05、Approvals A-D01/A-D03/A-D05、AP-01 验证记录及编码规则。
+
+### AX-R08 主 Agent 增补（2026-10-28）
+
+主 Agent 维护轻量领域目录、行为 skill 入口、回答流程经验、工具规则和认证问答链接卡片；正文仍走 RAG，账号私人记忆单独装配。认证卡片命中极相似且可复用的问题后返回真实问题/答案定位链接，执行前核验认证与可见状态。
+
+为逻辑子 Agent 装配独立工具注册表，执行能力为后端当前授权、主 Agent 分配能力与子 Agent 只读能力的交集；主 Agent 的分配结果经确定性程序校验，不能用提示词替代。治理动作不进只读子 Agent，交审批协调并由后端执行。目录和规则按受控变更事件更新并发布版本快照，周期核对补漏；权限收紧仍逐调用复核。回答经验如何审核形成全局条目在实现前单独定案。
+
 ## 2026-10-25 周报高频标签增强（TW-R01）
 
 后端近期问题接口已返回真实 tags，Agent 的 RecentQuestionsSchema 当前会将其剥离；补上 tags（id/name/type，旧无标签响应缺省为空）即可，无需新接口或数据库迁移。新增 scheduler/tag-focus.ts：按 question.id 去重、每题每 tag.id 只计一次，保留关联问题 ID；同标签至少 2 题，按题数降序、tag.id 升序，最多列前 10 项。仅说明本次纳入分析的样本（现有限额 200），不声称全量或学生人数，不把同标签说成内容重复。

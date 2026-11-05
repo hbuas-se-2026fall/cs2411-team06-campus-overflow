@@ -24,6 +24,8 @@ import {
 } from "@/shared/components";
 import { toErrorMessage, useAsyncData } from "@/shared/hooks/useAsyncData";
 import type { ModerationCaseItem } from "@/shared/types/governance";
+import { v2RequestId } from "@/api/governance-v2";
+import { GovernanceApprovalV2Panel } from "./GovernanceApprovalV2Panel";
 
 const PAGE_SIZE = 20;
 
@@ -76,7 +78,7 @@ export function ApprovalCenterView() {
     cases.find((item) => item.id === selectedId) ?? null;
 
   async function executeResolve() {
-    if (!selected || !decision) return;
+    if (!selected || !decision || v2RequestId(selected.snapshot) !== undefined) return;
     setBusy(true);
     try {
       await resolveModerationCase(selected.id, {
@@ -186,7 +188,9 @@ export function ApprovalCenterView() {
                   ) : null}
                 </div>
 
-                {selected.status === "pending" || selected.status === "agent_proposed" ? (
+                {v2RequestId(selected.snapshot) !== undefined ? (
+                  <GovernanceApprovalV2Panel key={selected.id} requestId={v2RequestId(selected.snapshot) ?? ""} />
+                ) : selected.status === "pending" || selected.status === "agent_proposed" ? (
                   <>
                     <Select
                       label="处置动作"
@@ -249,7 +253,7 @@ export function ApprovalCenterView() {
       {toast !== null && (
         <Toast tone={toast.tone} message={toast.message} onClose={() => setToast(null)} />
       )}
-      {confirming && selected !== null ? (
+      {confirming && selected !== null && v2RequestId(selected.snapshot) === undefined ? (
         <ConfirmDialog
           open
           busy={busy}
