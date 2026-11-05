@@ -167,6 +167,7 @@ export function EditQuestionPanel({ questionId }: { questionId: number }) {
 
       <ConfirmDialog
         open={isDeleteDialogOpen}
+        busy={isDeleting}
         danger
         title="确认删除该问题？"
         description="删除后问题与全部回答将不再可见，此操作无法撤销。"

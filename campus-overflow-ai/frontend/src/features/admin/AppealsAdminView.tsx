@@ -12,10 +12,13 @@ import {
   EmptyState,
   ErrorState,
   LoadingSkeleton,
+  Pagination,
   Select,
   Toast,
   type ToastTone,
 } from "@/shared/components";
+
+const PAGE_SIZE = 20;
 import { toErrorMessage, useAsyncData } from "@/shared/hooks/useAsyncData";
 import type { AppealItem } from "@/shared/types/governance";
 
@@ -36,16 +39,18 @@ export function AppealsAdminView() {
   const [confirming, setConfirming] = useState<AppealItem | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
 
   const state = useAsyncData(
     () => fetchAppeals({
       status: status === "all" ? undefined : status,
-      page: 1,
-      page_size: 50,
+      page,
+      page_size: PAGE_SIZE,
     }),
-    [status],
+    [status, page],
   );
   const appeals = state.data?.items ?? [];
+  const total = state.data?.total ?? 0;
 
   async function handleResolve(resolution: "accepted" | "rejected") {
     if (!confirming) return;
@@ -78,7 +83,10 @@ export function AppealsAdminView() {
           <Select
             label="状态"
             value={status}
-            onChange={(event) => setStatus(event.target.value)}
+            onChange={(event) => {
+              setStatus(event.target.value);
+              setPage(1);
+            }}
             options={STATUS_OPTIONS}
           />
         </div>
@@ -142,7 +150,14 @@ export function AppealsAdminView() {
               title="暂无申诉"
               description="当前筛选条件下没有申诉。被处置用户提交申诉后会出现在此处。"
             />
-          ) : null}
+          ) : (
+            <>
+              <p className="text-[12px] text-ink-subtle">共 {total} 条</p>
+              {total > PAGE_SIZE ? (
+                <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
+              ) : null}
+            </>
+          )}
         </>
       ) : null}
 
@@ -169,6 +184,7 @@ export function AppealsAdminView() {
       {confirming !== null && (
         <ConfirmDialog
           open
+          busy={busy}
           danger
           title={`复核申诉 #${confirming.id}`}
           description={`撤销处置将同时恢复内容可见或解禁该用户，结果将通知当事人。${

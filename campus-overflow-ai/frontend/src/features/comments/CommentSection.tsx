@@ -31,6 +31,7 @@ export function CommentSection({
 }) {
   const { data, isLoading, error, reload } = useAsyncData(loadComments, []);
   const [pendingDelete, setPendingDelete] = useState<DeletableComment | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // 删除权限：评论作者本人或管理员
   const canDelete = (author: string): boolean =>
@@ -48,13 +49,15 @@ export function CommentSection({
   }
 
   async function handleDeleteConfirm() {
-    if (pendingDelete === null) return;
+    if (pendingDelete === null || isDeleting) return;
+    setIsDeleting(true);
     try {
       await deleteComment(pendingDelete.id);
       reload();
     } catch (caught) {
       showToast("error", toErrorMessage(caught));
     } finally {
+      setIsDeleting(false);
       setPendingDelete(null);
     }
   }
@@ -90,6 +93,7 @@ export function CommentSection({
 
       <ConfirmDialog
         open={pendingDelete !== null}
+        busy={isDeleting}
         title="删除评论"
         description="删除后不可恢复，确定删除这条评论吗？"
         confirmLabel="删除"

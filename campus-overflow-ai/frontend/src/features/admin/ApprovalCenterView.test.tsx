@@ -53,6 +53,21 @@ afterEach(() => {
   useSessionStore.setState({ me: null });
 });
 
+it("审批队列超过 20 条显示分页；翻页带 page=2 重新拉取", async () => {
+  mocks.fetchModerationCases.mockResolvedValue({
+    items: [USER_CASE], total: 45, page: 1, page_size: 20,
+  });
+  render(<ApprovalCenterView />);
+  await screen.findByRole("button", { name: /#9 用户 #5/ });
+
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  await waitFor(() => {
+    expect(mocks.fetchModerationCases).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 2, page_size: 20 }),
+    );
+  });
+});
+
 it("v2工单不展示旧处置表单，也不调用resolve", async () => {
   const id = "00000000-0000-4000-8000-000000000001";
   useSessionStore.setState({ me: { id: 1, role: "admin" } as UserMe });

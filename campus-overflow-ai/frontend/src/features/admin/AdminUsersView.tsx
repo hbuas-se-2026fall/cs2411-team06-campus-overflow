@@ -54,6 +54,7 @@ export function AdminUsersView() {
   const [banTarget, setBanTarget] = useState<AdminUserRow | null>(null);
   const [unbanTarget, setUnbanTarget] = useState<AdminUserRow | null>(null);
   const [isBanning, setIsBanning] = useState(false);
+  const [isUnbanning, setIsUnbanning] = useState(false);
   const [toast, setToast] = useState<{ tone: ToastTone; message: string } | null>(null);
 
   const listState = useAsyncData(
@@ -85,15 +86,18 @@ export function AdminUsersView() {
   }
 
   async function handleUnbanConfirm(): Promise<void> {
-    if (unbanTarget === null) return;
+    if (unbanTarget === null || isUnbanning) return;
     const target = unbanTarget;
-    setUnbanTarget(null);
+    setIsUnbanning(true);
     try {
       await unbanUser(target.id);
+      setUnbanTarget(null);
       setToast({ tone: "success", message: "已解禁该用户" });
       setReloadToken((token) => token + 1);
     } catch (caught) {
       setToast({ tone: "error", message: toErrorMessage(caught) });
+    } finally {
+      setIsUnbanning(false);
     }
   }
 
@@ -179,6 +183,7 @@ export function AdminUsersView() {
 
       <ConfirmDialog
         open={unbanTarget !== null}
+        busy={isUnbanning}
         title={`确认解禁 · ${unbanTarget?.username ?? ""}`}
         description="解禁将立即生效，用户可恢复登录和参与问答。"
         danger

@@ -10,10 +10,13 @@ import {
   EmptyState,
   ErrorState,
   LoadingSkeleton,
+  Pagination,
   Select,
   TabNav,
 } from "@/shared/components";
 import { useAsyncData } from "@/shared/hooks/useAsyncData";
+
+const PAGE_SIZE = 20;
 
 const STATUS_TABS = [
   { key: "all", label: "全部" },
@@ -35,15 +38,16 @@ const STATUS_LABELS: Record<string, string> = {
 export function AdminAgentRunsView() {
   const [status, setStatus] = useState("all");
   const [taskType, setTaskType] = useState("all");
+  const [page, setPage] = useState(1);
 
   const state = useAsyncData(
     () => fetchAgentRuns({
       status: status === "all" ? undefined : status,
       task_type: taskType === "all" ? undefined : taskType,
-      page: 1,
-      page_size: 50,
+      page,
+      page_size: PAGE_SIZE,
     }),
-    [status, taskType],
+    [status, taskType, page],
   );
   const runs = state.data?.items ?? [];
 
@@ -56,7 +60,10 @@ export function AdminAgentRunsView() {
           <Select
             label="任务类型"
             value={taskType}
-            onChange={(event) => setTaskType(event.target.value)}
+            onChange={(event) => {
+              setTaskType(event.target.value);
+              setPage(1);
+            }}
             options={[
               { value: "all", label: "全部类型" },
               ...Object.entries(TASK_TYPE_LABELS).map(([value, label]) => ({
@@ -67,7 +74,14 @@ export function AdminAgentRunsView() {
         </div>
       </div>
 
-      <TabNav tabs={STATUS_TABS} active={status} onChange={setStatus} />
+      <TabNav
+        tabs={STATUS_TABS}
+        active={status}
+        onChange={(next) => {
+          setStatus(next);
+          setPage(1);
+        }}
+      />
 
       {state.isLoading ? <LoadingSkeleton variant="detail" count={3} /> : null}
       {state.error !== null ? (
@@ -141,7 +155,17 @@ export function AdminAgentRunsView() {
               description="当前筛选条件下没有 Agent 运行。用户使用智能功能或系统调度触发后此处展示。"
             />
           ) : (
-            <p className="text-[12px] text-ink-subtle">共 {state.data?.total ?? 0} 条</p>
+            <>
+              <p className="text-[12px] text-ink-subtle">共 {state.data?.total ?? 0} 条</p>
+              {(state.data?.total ?? 0) > PAGE_SIZE ? (
+                <Pagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  total={state.data?.total ?? 0}
+                  onChange={setPage}
+                />
+              ) : null}
+            </>
           )}
         </>
       ) : null}

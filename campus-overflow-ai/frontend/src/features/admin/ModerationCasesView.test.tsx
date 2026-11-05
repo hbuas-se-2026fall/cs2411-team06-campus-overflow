@@ -84,6 +84,22 @@ describe("ModerationCasesView 审核队列", () => {
     });
   });
 
+  it("超过 20 条显示分页；翻页带 page=2 重新拉取", async () => {
+    mocks.fetchModerationCases.mockResolvedValue({
+      items: [CASE_PENDING], total: 45, page: 1, page_size: 20,
+    });
+    render(<ModerationCasesView />);
+    await screen.findByText("疑似辱骂攻击");
+
+    expect(screen.getByText("共 45 条")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => {
+      expect(mocks.fetchModerationCases).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2, page_size: 20 }),
+      );
+    });
+  });
+
   it("空列表渲染空态说明", async () => {
     mocks.fetchModerationCases.mockResolvedValue({
       items: [], total: 0, page: 1, page_size: 50,

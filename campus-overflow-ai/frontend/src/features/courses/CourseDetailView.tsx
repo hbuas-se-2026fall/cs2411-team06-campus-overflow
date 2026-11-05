@@ -284,6 +284,7 @@ export function CourseDetailView({
 
       <ConfirmDialog
         open={confirmLeave}
+        busy={pending}
         title="确认退出这门课程？"
         description="退出后需要重新加入，才能在这门课程下提问。"
         confirmLabel="确认退出"
