@@ -42,9 +42,16 @@ export function GovernanceApprovalV2Panel({ requestId }: { requestId: string }) 
     </> : <p>正在读取后端冻结清单…</p>}
     <Button disabled={flow.busy} onClick={() => void flow.refresh()}>核对执行状态</Button>
     {flow.error ? <p role="alert">{flow.error}</p> : null}
-    {confirmation && review && confirmation.owner === flow.owner && confirmation.item.request_id === requestId ? <ConfirmDialog open danger title={confirmation.operation === "approve" ? "批准冻结治理动作" : confirmation.operation === "reject" ? "拒绝治理动作" : "取消待执行动作"}
+    {confirmation && review && confirmation.owner === flow.owner && confirmation.item.request_id === requestId ? <ConfirmDialog open busy={flow.busy} danger title={confirmation.operation === "approve" ? "批准冻结治理动作" : confirmation.operation === "reject" ? "拒绝治理动作" : "取消待执行动作"}
       description={`${targets[review.target_type] ?? review.target_type} #${review.target_id}：${actions[review.action] ?? review.action}${review.duration_days ? ` ${review.duration_days} 天` : ""}。${confirmation.operation === "approve" ? "确认后仅放行这一次调用，后台复核后执行。" : "该操作不撤销已经执行的治理。"}`}
       confirmLabel={confirmation.operation === "approve" ? "确认批准" : "确认"} onCancel={() => setConfirmation(null)}
-      onConfirm={() => { const selected = confirmation; setConfirmation(null); void flow.decide(selected.item, selected.operation, note.trim() || "管理员已核对冻结清单"); }} /> : null}
+      onConfirm={() => {
+        const selected = confirmation;
+        if (!selected) return;
+        // 请求结束再关弹窗：busy 期间 ConfirmDialog 禁用按钮并锁 ESC，避免并发处置
+        void flow
+          .decide(selected.item, selected.operation, note.trim() || "管理员已核对冻结清单")
+          .finally(() => setConfirmation(null));
+      }} /> : null}
   </section>;
 }
