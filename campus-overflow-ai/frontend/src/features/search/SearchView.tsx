@@ -164,7 +164,7 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
   );
 
   const handleAsk = useCallback(() => {
-    // 空态"直接提问"引导；未登录由 middleware 拦截跳登录
+    // 空态"直接提问"引导；未登录由 src/proxy.ts 拦截跳登录
     router.push("/questions/new");
   }, [router]);
 

@@ -10,8 +10,8 @@ const QUEUE_TABS = [
 ];
 
 // 工单处理（页面控件级设计说明 §3.4）：双栏骨架——左栏工单队列（5 列）+ 右栏详情占位（7 列）
-// TODO(接口差异)：governance 工单接口为 501 占位（治理逻辑一期仅建表），队列与详情均为静态骨架，
-// 不调用接口、不放假数据；工单行、处置动作按钮组、来源内容预览与处理记录时间线随接口开放后补齐
+// TODO(接口差异)：治理工单接口已实现但仅允许管理员调用；教师课程范围队列尚无正式接口，
+// 因此本页不调用管理员接口、不放假数据；教师端工单契约就绪后再补齐队列、处置和详情
 export function TeacherModerationView({ initialCaseId }: { initialCaseId?: string | null }) {
   // Tab 为组件状态：工单接口开放后按仓库约定改为 URL 参数来源
   const [activeTab, setActiveTab] = useState("pending");
