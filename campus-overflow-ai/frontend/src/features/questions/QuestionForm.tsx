@@ -66,6 +66,14 @@ export interface QuestionFormProps<T = unknown> {
   // 成功后回调（发布页跳详情、编辑页回详情）；Toast 由表单展示
   onSuccess?: (result: T) => void;
   onCancel?: () => void;
+  /** 表单草稿变化（提问前的相似问题建议用；编辑页不传） */
+  onDraftChange?: (draft: {
+    title: string;
+    body: string;
+    courseId: number | null;
+    tagIds: Array<number | string>;
+    tagNames: string[];
+  }) => void;
 }
 
 const TITLE_MAX = 100;
@@ -106,6 +114,7 @@ export function QuestionForm<T = unknown>({
   onSubmit,
   onSuccess,
   onCancel,
+  onDraftChange,
 }: QuestionFormProps<T>) {
   const router = useRouter();
   const coursesState = useAsyncData(
@@ -133,6 +142,21 @@ export function QuestionForm<T = unknown>({
   // 底部草稿状态行（§2.8）：保存成功显示相对时间，失败提示手动备份
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   const [isDraftSaveFailed, setIsDraftSaveFailed] = useState(false);
+
+  // 草稿变化上报（ref 避免父级内联回调导致 effect 反复触发）
+  const onDraftChangeRef = useRef(onDraftChange);
+  useEffect(() => {
+    onDraftChangeRef.current = onDraftChange;
+  }, [onDraftChange]);
+  useEffect(() => {
+    onDraftChangeRef.current?.({
+      title,
+      body: content,
+      courseId: courseId === "" ? null : Number(courseId),
+      tagIds: tags.map((tag) => tag.id ?? tag.name),
+      tagNames: tags.map((tag) => tag.name),
+    });
+  }, [title, content, courseId, tags]);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const initialValuesRef = useRef(initialValues);

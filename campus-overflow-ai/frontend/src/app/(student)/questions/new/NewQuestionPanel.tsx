@@ -7,9 +7,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { JUST_CREATED_QUESTION_KEY } from "@/api/agent-assist";
 import { bindQuestionTags, createQuestion } from "@/api/questions";
 import { Toast, type ToastTone } from "@/shared/components";
+import { SimilarQuestionsCard } from "@/features/agent-assist/SimilarQuestionsCard";
 import { QuestionForm } from "@/features/questions/QuestionForm";
+import {
+  NEW_QUESTION_DRAFT_KEY,
+  saveDraft,
+  type QuestionDraftValues,
+} from "@/features/questions/draft";
 import type { QuestionCreated } from "@/shared/types/question";
 
 export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number | null }) {
@@ -17,10 +24,37 @@ export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number 
   // 绑定失败的提示用本页 toast 承载（QuestionForm 的 toast 只管发布本身）；
   // 跳转详情后用户可直接看到标签落库结果
   const [bindToast, setBindToast] = useState<{ tone: ToastTone; message: string } | null>(null);
+  const [draft, setDraft] = useState<{
+    title: string;
+    body: string;
+    courseId: number | null;
+    tagIds: Array<number | string>;
+    tagNames: string[];
+  }>({
+    title: "",
+    body: "",
+    courseId: initialCourseId,
+    tagIds: [],
+    tagNames: [],
+  });
   return (
     <>
+      <SimilarQuestionsCard
+        questionTitle={draft.title}
+        questionBody={draft.body}
+        courseId={draft.courseId}
+        onNavigate={() => {
+          saveDraft(NEW_QUESTION_DRAFT_KEY, {
+            title: draft.title,
+            content: draft.body,
+            course_id: draft.courseId,
+            tag_ids: draft.tagIds,
+            tag_names: draft.tagNames,
+          } satisfies QuestionDraftValues);
+        }}
+      />
       <QuestionForm<QuestionCreated>
-        draftKey="co_draft_new_question"
+        draftKey={NEW_QUESTION_DRAFT_KEY}
         initialValues={{ course_id: initialCourseId }}
         onSubmit={async (values) => {
           const intTagIds = values.tag_ids?.filter((t): t is number => typeof t === "number");
@@ -31,6 +65,12 @@ export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number 
             course_id: values.course_id,
             tag_ids: intTagIds,
           });
+          // 只有当前浏览器会话知道“刚创建”的是哪个问题；实际写标签仍由服务端鉴权。
+          try {
+            window.sessionStorage.setItem(JUST_CREATED_QUESTION_KEY, String(created.id));
+          } catch {
+            // 浏览器禁用存储不能反过来把已成功的发布显示为失败。
+          }
           if (newTagNames && newTagNames.length > 0) {
             try {
               await bindQuestionTags(created.id, newTagNames);
@@ -45,6 +85,7 @@ export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number 
           return created;
         }}
         onSuccess={(created) => router.push(`/questions/${created.id}`)}
+        onDraftChange={setDraft}
       />
       {bindToast && (
         <Toast

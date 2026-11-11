@@ -133,9 +133,16 @@ describe("questions api", () => {
   });
 
   it("bindQuestionTags：POST /questions/{id}/tags，tag_ids 蛇形键", async () => {
-    await questions.bindQuestionTags(7, [1, "作业三"]);
+    mockBodyOnce({
+      code: 200,
+      data: { tags: [{ id: 1, name: "作业三", type: "custom" }] },
+      message: "绑定成功",
+    });
+
+    const result = await questions.bindQuestionTags(7, [1, "作业三"]);
     expect(lastCall().url).toBe("/api/backend/api/questions/7/tags");
     expect(dataOf(lastCall().init)).toEqual({ tag_ids: [1, "作业三"] });
+    expect(result).toEqual({ tags: [{ id: 1, name: "作业三", type: "custom" }] });
   });
 });
 

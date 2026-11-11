@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   listCourses: vi.fn(),
   listTags: vi.fn(),
   createQuestion: vi.fn(),
+  bindQuestionTags: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -22,7 +23,10 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/api/courses", () => ({ listCourses: mocks.listCourses }));
 vi.mock("@/api/tags", () => ({ listTags: mocks.listTags }));
-vi.mock("@/api/questions", () => ({ createQuestion: mocks.createQuestion }));
+vi.mock("@/api/questions", () => ({
+  createQuestion: mocks.createQuestion,
+  bindQuestionTags: mocks.bindQuestionTags,
+}));
 
 const COURSES: Course[] = [
   { id: 1, name: "数据结构", code: "CS201", teacher_name: "张老师", member_count: 60, question_count: 24, created_at: "2026-09-01T08:00:00" },
@@ -39,16 +43,19 @@ const BODY = "正文内容：已随机化 pivot 仍会退化。";
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
   mocks.push.mockReset();
   mocks.back.mockReset();
   mocks.listCourses.mockReset().mockResolvedValue({ items: COURSES, total: 2, page: 1, page_size: 100 });
   mocks.listTags.mockReset().mockResolvedValue({ items: TAGS });
   mocks.createQuestion.mockReset();
+  mocks.bindQuestionTags.mockReset();
 });
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 async function renderForm(props: Partial<QuestionFormProps> = {}) {
@@ -76,6 +83,22 @@ function fillValidForm(): void {
 }
 
 describe("QuestionForm 标题与提交校验", () => {
+  it("onDraftChange 上报标题、正文与课程，供发布前相似问题使用", async () => {
+    const onDraftChange = vi.fn();
+    await renderForm({ onDraftChange });
+    fillValidForm();
+
+    await waitFor(() => {
+      expect(onDraftChange).toHaveBeenLastCalledWith({
+        title: TITLE,
+        body: BODY,
+        courseId: 1,
+        tagIds: [],
+        tagNames: [],
+      });
+    });
+  });
+
   it("标题失焦校验：空/过短/超长分别提示，右下角计数 x/100", async () => {
     await renderForm();
     const title = screen.getByLabelText("标题") as HTMLInputElement;
@@ -336,6 +359,46 @@ describe("QuestionForm 提交失败", () => {
 });
 
 describe("NewQuestionPanel 发布接线", () => {
+  it("点击相似问题前保存当前标题、正文与课程草稿", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          code: 200,
+          data: {
+            items: [{
+              questionId: 3,
+              title: "已有相似问题",
+              url: "/questions/3",
+              reason: "标题相似",
+            }],
+            hasInSiteEvidence: true,
+            note: "基于站内检索。",
+          },
+          message: "ok",
+        }),
+      ),
+    );
+    render(<NewQuestionPanel initialCourseId={null} />);
+    await waitFor(() => {
+      const select = screen.getByLabelText("课程") as HTMLSelectElement;
+      expect(select.options.length).toBeGreaterThan(1);
+    });
+    fillValidForm();
+    const link = await screen.findByRole("link", { name: "已有相似问题" }, { timeout: 2500 });
+    link.addEventListener("click", (event) => event.preventDefault());
+
+    fireEvent.click(link);
+
+    const raw = window.localStorage.getItem(NEW_QUESTION_DRAFT_KEY);
+    const saved = JSON.parse(String(raw)) as {
+      title: string;
+      content: string;
+      course_id: number;
+    };
+    expect(saved).toMatchObject({ title: TITLE, content: BODY, course_id: 1 });
+  });
+
   it("提交调用 createQuestion（蛇形入参），成功后跳转 /questions/{id}", async () => {
     mocks.createQuestion.mockResolvedValue({
       id: 55,
@@ -360,5 +423,6 @@ describe("NewQuestionPanel 发布接线", () => {
       tag_ids: [],
     });
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/questions/55"));
+    expect(window.sessionStorage.getItem("co_just_created_question")).toBe("55");
   });
 });
