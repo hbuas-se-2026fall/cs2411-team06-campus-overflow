@@ -67,7 +67,13 @@ export interface QuestionFormProps<T = unknown> {
   onSuccess?: (result: T) => void;
   onCancel?: () => void;
   /** 表单草稿变化（提问前的相似问题建议用；编辑页不传） */
-  onDraftChange?: (draft: { title: string; body: string; courseId: number | null }) => void;
+  onDraftChange?: (draft: {
+    title: string;
+    body: string;
+    courseId: number | null;
+    tagIds: Array<number | string>;
+    tagNames: string[];
+  }) => void;
 }
 
 const TITLE_MAX = 100;
@@ -147,8 +153,10 @@ export function QuestionForm<T = unknown>({
       title,
       body: content,
       courseId: courseId === "" ? null : Number(courseId),
+      tagIds: tags.map((tag) => tag.id ?? tag.name),
+      tagNames: tags.map((tag) => tag.name),
     });
-  }, [title, content, courseId]);
+  }, [title, content, courseId, tags]);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const initialValuesRef = useRef(initialValues);

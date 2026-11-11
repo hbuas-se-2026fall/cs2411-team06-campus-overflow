@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   createQuestionComment: vi.fn(),
   deleteComment: vi.fn(),
   bindQuestionTags: vi.fn(),
+  suggestTags: vi.fn(),
   fetchUserAnswers: vi.fn(),
   fetchUserQuestions: vi.fn(),
   recommendAnswer: vi.fn(),
@@ -39,6 +40,10 @@ vi.mock("@/api/questions", () => ({
   createQuestionComment: mocks.createQuestionComment,
   deleteComment: mocks.deleteComment,
   bindQuestionTags: mocks.bindQuestionTags,
+}));
+vi.mock("@/api/agent-assist", () => ({
+  JUST_CREATED_QUESTION_KEY: "co_just_created_question",
+  suggestTags: mocks.suggestTags,
 }));
 vi.mock("@/api/courses", () => ({ fetchCourseDetail: mocks.fetchCourseDetail }));
 vi.mock("@/api/answers", () => ({ recommendAnswer: mocks.recommendAnswer }));
@@ -122,7 +127,11 @@ beforeEach(() => {
   mocks.fetchQuestionComments.mockReset().mockResolvedValue({ items: [], total: 0, page: 1 });
   mocks.createQuestionComment.mockReset();
   mocks.deleteComment.mockReset();
-  mocks.bindQuestionTags.mockReset();
+  mocks.bindQuestionTags.mockReset().mockResolvedValue({});
+  mocks.suggestTags.mockReset().mockResolvedValue({
+    tags: [{ name: "动态规划", reason: "正文涉及状态转移", confidence: 0.9 }],
+    basisNote: "依据为文本语义匹配。",
+  });
   mocks.fetchUserAnswers.mockReset();
   mocks.fetchUserQuestions.mockReset();
   mocks.recommendAnswer.mockReset().mockResolvedValue({ recommended_by_assistant: true });
@@ -298,6 +307,18 @@ describe("QuestionDetailView", () => {
     expect(await screen.findByText("数据结构")).toBeTruthy();
     expect(screen.getByText("已采纳")).toBeTruthy();
     expect(screen.getByText("teacher01")).toBeTruthy();
+  });
+
+  it("刚发布的问题确认标签后刷新详情并提示标签已更新", async () => {
+    window.sessionStorage.setItem("co_just_created_question", "4");
+    render(<QuestionDetailView questionId={4} />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: /动态规划/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认添加（1）" }));
+
+    await waitFor(() => expect(mocks.bindQuestionTags).toHaveBeenCalledWith(4, ["动态规划"]));
+    expect(await screen.findByText("标签已更新")).toBeTruthy();
+    await waitFor(() => expect(mocks.fetchQuestionDetail).toHaveBeenCalledTimes(2));
   });
 
   it("提问者本人可见采纳按钮；非本人不可见", async () => {

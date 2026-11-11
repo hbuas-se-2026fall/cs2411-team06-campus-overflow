@@ -324,7 +324,11 @@ export function QuestionDetailView({
             questionTitle={detail.title}
             questionBody={detail.body}
             courseId={detail.course_id}
-            onApplied={reload}
+            existingTags={detail.tags}
+            onApplied={() => {
+              setBanner("标签已更新");
+              reload();
+            }}
           />
 
           <section className="flex flex-col gap-3">

@@ -10,6 +10,7 @@ import type {
   QuestionListItem,
   QuestionListParams,
   QuestionSort,
+  TagBrief,
   VoteResult,
 } from "@/shared/types/question";
 
@@ -103,7 +104,7 @@ export async function createQuestion(input: CreateQuestionInput) {
 
 /** 绑定标签（POST /api/questions/{id}/tags）：tag_ids 支持已有标签 id 或新标签名 */
 export function bindQuestionTags(questionId: number, tagIds: Array<number | string>) {
-  return apiFetch<QuestionDetail>(`/questions/${questionId}/tags`, {
+  return apiFetch<{ tags: TagBrief[] }>(`/questions/${questionId}/tags`, {
     method: "POST",
     body: JSON.stringify({ tag_ids: tagIds }),
   });
