@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
     loadMe: vi.fn(),
   },
   listAssistantCertifications: vi.fn(),
+  listCourses: vi.fn(),
+  fetchUserAnswers: vi.fn(),
 }));
 
 vi.mock("@/shared/stores/session-store", () => ({
@@ -19,6 +21,10 @@ vi.mock("@/shared/stores/session-store", () => ({
 vi.mock("@/api/users", () => ({
   listAssistantCertifications: mocks.listAssistantCertifications,
   reviewAssistantCertification: vi.fn(),
+  fetchUserAnswers: mocks.fetchUserAnswers,
+}));
+vi.mock("@/api/courses", () => ({
+  listCourses: mocks.listCourses,
 }));
 
 import type { UserMe } from "@/shared/types/auth";
@@ -58,6 +64,18 @@ describe("TeacherWorkspaceView", () => {
       page: 1,
       page_size: 20,
     });
+    mocks.listCourses.mockReset().mockResolvedValue({
+      items: [],
+      total: 3,
+      page: 1,
+      page_size: 1,
+    });
+    mocks.fetchUserAnswers.mockReset().mockResolvedValue({
+      items: [],
+      total: 12,
+      page: 1,
+      page_size: 10,
+    });
   });
 
   afterEach(() => {
@@ -73,15 +91,44 @@ describe("TeacherWorkspaceView", () => {
     expect(mocks.session.loadMe).not.toHaveBeenCalled();
   });
 
-  it("登录态渲染四张指标卡：数字以 '-' 占位，导航 href 正确", () => {
+  it("登录态渲染真实课程/回答总数，无聚合接口的指标继续占位", async () => {
     render(<TeacherWorkspaceView />);
 
-    expect(linkByLabel(/我的课程/).getAttribute("href")).toBe("/teacher/courses");
+    const courseLink = linkByLabel(/我的课程/);
+    expect(courseLink.getAttribute("href")).toBe("/teacher/courses");
     expect(linkByLabel(/待处理工单/).getAttribute("href")).toBe("/teacher/moderation");
     expect(linkByLabel(/待审核问题/).getAttribute("href")).toBe("/teacher/certify");
     expect(linkByLabel(/我的回答/).getAttribute("href")).toBe("/users/7");
-    // TODO(接口差异) 对应：无聚合指标接口，四个数字均为占位 "-"
-    expect(screen.getAllByText("-")).toHaveLength(4);
+    expect(await within(courseLink).findByText("3")).toBeTruthy();
+    expect(within(linkByLabel(/我的回答/)).getByText("12")).toBeTruthy();
+    expect(mocks.listCourses).toHaveBeenCalledWith({ mine: true, page: 1, page_size: 1 });
+    expect(mocks.fetchUserAnswers).toHaveBeenCalledWith(7, 1);
+    expect(screen.getAllByText("—")).toHaveLength(2);
+  });
+
+  it("单个指标请求失败只让该卡显示“—”，不拖垮其他真实指标", async () => {
+    mocks.listCourses.mockRejectedValue(new Error("课程统计失败"));
+    render(<TeacherWorkspaceView />);
+
+    expect(await within(linkByLabel(/我的回答/)).findByText("12")).toBeTruthy();
+    expect(within(linkByLabel(/我的课程/)).getByText("—")).toBeTruthy();
+    expect(screen.getByText("我的课程")).toBeTruthy();
+    expect(screen.getByText("教师端工单接口尚未开放")).toBeTruthy();
+  });
+
+  it("切换登录账号时不沿用上一账号的指标数字", async () => {
+    const view = render(<TeacherWorkspaceView />);
+    expect(await within(linkByLabel(/我的课程/)).findByText("3")).toBeTruthy();
+    expect(within(linkByLabel(/我的回答/)).getByText("12")).toBeTruthy();
+
+    mocks.listCourses.mockReturnValue(new Promise(() => {}));
+    mocks.fetchUserAnswers.mockReturnValue(new Promise(() => {}));
+    mocks.session.me = { ...MOCK_ME, id: 8, username: "李老师" };
+    view.rerender(<TeacherWorkspaceView />);
+
+    expect(screen.queryByText("3")).toBeNull();
+    expect(screen.queryByText("12")).toBeNull();
+    expect(screen.getAllByText("—")).toHaveLength(4);
   });
 
   it("工单区 Tab 为组件状态切换：默认待处理，可切历史；空态文案固定", () => {
@@ -130,6 +177,8 @@ describe("TeacherWorkspaceView", () => {
 
     expect(screen.getByText("登录后查看教师工作台")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /我的课程/ })).toBeNull();
+    expect(mocks.listCourses).not.toHaveBeenCalled();
+    expect(mocks.fetchUserAnswers).not.toHaveBeenCalled();
   });
 
   it("加载态渲染骨架屏，不渲染指标卡", () => {
@@ -139,5 +188,7 @@ describe("TeacherWorkspaceView", () => {
 
     expect(screen.getByText("正在加载教师工作台")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /我的课程/ })).toBeNull();
+    expect(mocks.listCourses).not.toHaveBeenCalled();
+    expect(mocks.fetchUserAnswers).not.toHaveBeenCalled();
   });
 });
