@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 
 import { bindQuestionTags, createQuestion } from "@/api/questions";
 import { Toast, type ToastTone } from "@/shared/components";
+import { SimilarQuestionsCard } from "@/features/agent-assist/SimilarQuestionsCard";
 import { QuestionForm } from "@/features/questions/QuestionForm";
 import type { QuestionCreated } from "@/shared/types/question";
 
@@ -17,8 +18,18 @@ export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number 
   // 绑定失败的提示用本页 toast 承载（QuestionForm 的 toast 只管发布本身）；
   // 跳转详情后用户可直接看到标签落库结果
   const [bindToast, setBindToast] = useState<{ tone: ToastTone; message: string } | null>(null);
+  const [draft, setDraft] = useState<{ title: string; body: string; courseId: number | null }>({
+    title: "",
+    body: "",
+    courseId: initialCourseId,
+  });
   return (
     <>
+      <SimilarQuestionsCard
+        questionTitle={draft.title}
+        questionBody={draft.body}
+        courseId={draft.courseId}
+      />
       <QuestionForm<QuestionCreated>
         draftKey="co_draft_new_question"
         initialValues={{ course_id: initialCourseId }}
@@ -45,6 +56,7 @@ export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number 
           return created;
         }}
         onSuccess={(created) => router.push(`/questions/${created.id}`)}
+        onDraftChange={setDraft}
       />
       {bindToast && (
         <Toast
