@@ -24,6 +24,7 @@ import { isGraduateAssistant } from "@/shared/utils/assistant";
 import { isAuthorOf } from "@/shared/utils/ownership";
 import { previewVote } from "@/shared/utils/vote";
 import { formatRelativeTime } from "@/shared/utils/format";
+import { SuggestTagsCard } from "@/features/agent-assist/SuggestTagsCard";
 
 import { AnswerCard } from "./AnswerCard";
 import { AnswerForm } from "./AnswerForm";
@@ -317,6 +318,14 @@ export function QuestionDetailView({
               </div>
             </div>
           </article>
+
+          <SuggestTagsCard
+            questionId={detail.id}
+            questionTitle={detail.title}
+            questionBody={detail.body}
+            courseId={detail.course_id}
+            onApplied={reload}
+          />
 
           <section className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">

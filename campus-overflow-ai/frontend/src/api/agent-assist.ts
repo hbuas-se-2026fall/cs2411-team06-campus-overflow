@@ -1,6 +1,8 @@
 // AI 辅助（相似问题 / 标签建议）：BFF /api/agent/** 转发到 Agent 服务。
 // 字段与 agent/src/types/index.ts 的真实 Schema 对齐（camelCase，非蛇形）。
 
+export const JUST_CREATED_QUESTION_KEY = "co_just_created_question";
+
 export interface SimilarQuestionItem {
   questionId: number;
   title: string;

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   listCourses: vi.fn(),
   listTags: vi.fn(),
   createQuestion: vi.fn(),
+  bindQuestionTags: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -22,7 +23,10 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/api/courses", () => ({ listCourses: mocks.listCourses }));
 vi.mock("@/api/tags", () => ({ listTags: mocks.listTags }));
-vi.mock("@/api/questions", () => ({ createQuestion: mocks.createQuestion }));
+vi.mock("@/api/questions", () => ({
+  createQuestion: mocks.createQuestion,
+  bindQuestionTags: mocks.bindQuestionTags,
+}));
 
 const COURSES: Course[] = [
   { id: 1, name: "数据结构", code: "CS201", teacher_name: "张老师", member_count: 60, question_count: 24, created_at: "2026-09-01T08:00:00" },
@@ -39,11 +43,13 @@ const BODY = "正文内容：已随机化 pivot 仍会退化。";
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
   mocks.push.mockReset();
   mocks.back.mockReset();
   mocks.listCourses.mockReset().mockResolvedValue({ items: COURSES, total: 2, page: 1, page_size: 100 });
   mocks.listTags.mockReset().mockResolvedValue({ items: TAGS });
   mocks.createQuestion.mockReset();
+  mocks.bindQuestionTags.mockReset();
 });
 
 afterEach(() => {
@@ -360,5 +366,6 @@ describe("NewQuestionPanel 发布接线", () => {
       tag_ids: [],
     });
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/questions/55"));
+    expect(window.sessionStorage.getItem("co_just_created_question")).toBe("55");
   });
 });

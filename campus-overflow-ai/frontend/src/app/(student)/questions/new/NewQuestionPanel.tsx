@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { JUST_CREATED_QUESTION_KEY } from "@/api/agent-assist";
 import { bindQuestionTags, createQuestion } from "@/api/questions";
 import { Toast, type ToastTone } from "@/shared/components";
 import { SimilarQuestionsCard } from "@/features/agent-assist/SimilarQuestionsCard";
@@ -42,6 +43,12 @@ export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number 
             course_id: values.course_id,
             tag_ids: intTagIds,
           });
+          // 只有当前浏览器会话知道“刚创建”的是哪个问题；实际写标签仍由服务端鉴权。
+          try {
+            window.sessionStorage.setItem(JUST_CREATED_QUESTION_KEY, String(created.id));
+          } catch {
+            // 浏览器禁用存储不能反过来把已成功的发布显示为失败。
+          }
           if (newTagNames && newTagNames.length > 0) {
             try {
               await bindQuestionTags(created.id, newTagNames);

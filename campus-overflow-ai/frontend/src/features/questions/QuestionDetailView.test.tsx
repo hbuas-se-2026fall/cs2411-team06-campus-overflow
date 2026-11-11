@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   fetchQuestionComments: vi.fn(),
   createQuestionComment: vi.fn(),
   deleteComment: vi.fn(),
+  bindQuestionTags: vi.fn(),
   fetchUserAnswers: vi.fn(),
   fetchUserQuestions: vi.fn(),
   recommendAnswer: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock("@/api/questions", () => ({
   fetchQuestionComments: mocks.fetchQuestionComments,
   createQuestionComment: mocks.createQuestionComment,
   deleteComment: mocks.deleteComment,
+  bindQuestionTags: mocks.bindQuestionTags,
 }));
 vi.mock("@/api/courses", () => ({ fetchCourseDetail: mocks.fetchCourseDetail }));
 vi.mock("@/api/answers", () => ({ recommendAnswer: mocks.recommendAnswer }));
@@ -98,6 +100,7 @@ const ANSWER = {
 };
 
 beforeEach(() => {
+  window.sessionStorage.clear();
   window.history.replaceState(null, "", "/questions/4");
   mocks.currentUsername = "student01";
   mocks.currentRole = "student";
@@ -119,6 +122,7 @@ beforeEach(() => {
   mocks.fetchQuestionComments.mockReset().mockResolvedValue({ items: [], total: 0, page: 1 });
   mocks.createQuestionComment.mockReset();
   mocks.deleteComment.mockReset();
+  mocks.bindQuestionTags.mockReset();
   mocks.fetchUserAnswers.mockReset();
   mocks.fetchUserQuestions.mockReset();
   mocks.recommendAnswer.mockReset().mockResolvedValue({ recommended_by_assistant: true });
