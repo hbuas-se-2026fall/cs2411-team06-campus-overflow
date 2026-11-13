@@ -181,12 +181,15 @@ describe("TeacherWorkspaceView", () => {
     expect(mocks.fetchUserAnswers).not.toHaveBeenCalled();
   });
 
-  it("加载态渲染骨架屏，不渲染指标卡", () => {
+  it("加载态只渲染与四张指标卡对应的四个骨架", () => {
     mocks.session.status = "loading";
     mocks.session.me = null;
-    render(<TeacherWorkspaceView />);
+    const { container } = render(<TeacherWorkspaceView />);
 
     expect(screen.getByText("正在加载教师工作台")).toBeTruthy();
+    const metricGrid = container.querySelector(".grid.grid-cols-2");
+    expect(metricGrid?.querySelectorAll(".co-skeleton")).toHaveLength(4);
+    expect(container.querySelectorAll(".co-skeleton")).toHaveLength(6);
     expect(screen.queryByRole("link", { name: /我的课程/ })).toBeNull();
     expect(mocks.listCourses).not.toHaveBeenCalled();
     expect(mocks.fetchUserAnswers).not.toHaveBeenCalled();

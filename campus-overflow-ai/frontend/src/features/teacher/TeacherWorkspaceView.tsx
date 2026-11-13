@@ -89,7 +89,6 @@ export function TeacherWorkspaceView() {
           {METRIC_CARDS.map((card) => (
             <div key={card.href} className="co-skeleton h-[72px] rounded-lg" />
           ))}
-          <div className="co-skeleton h-[72px] rounded-lg" />
         </div>
         <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-12">
           <div className="co-skeleton h-64 rounded-lg lg:col-span-7" />
