@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NewQuestionPanel } from "@/app/(student)/questions/new/NewQuestionPanel";
@@ -386,6 +386,9 @@ describe("NewQuestionPanel 发布接线", () => {
     });
     fillValidForm();
     const link = await screen.findByRole("link", { name: "已有相似问题" }, { timeout: 2500 });
+    const sidebar = screen.getByRole("complementary", { name: "发布辅助信息" });
+    expect(within(sidebar).getByRole("link", { name: "已有相似问题" })).toBeTruthy();
+    expect(within(sidebar).getByText("好问题更容易被解答")).toBeTruthy();
     link.addEventListener("click", (event) => event.preventDefault());
 
     fireEvent.click(link);

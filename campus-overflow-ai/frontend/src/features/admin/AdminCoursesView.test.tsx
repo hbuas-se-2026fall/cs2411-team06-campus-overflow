@@ -1,13 +1,15 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listCourses: vi.fn(),
+  fetchCourseDetail: vi.fn(),
   updateCourse: vi.fn(),
 }));
 
 vi.mock("@/api/courses", () => ({
   listCourses: mocks.listCourses,
+  fetchCourseDetail: mocks.fetchCourseDetail,
   updateCourse: mocks.updateCourse,
 }));
 
@@ -44,6 +46,15 @@ const PAGE_PAYLOAD = { items: COURSES, total: COURSES.length, page: 1, page_size
 describe("AdminCoursesView", () => {
   beforeEach(() => {
     mocks.listCourses.mockResolvedValue(PAGE_PAYLOAD);
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...COURSES[0],
+      description: "数据库系统课程简介",
+      semester: "2026秋",
+      joined: true,
+      is_owner: false,
+      can_post: false,
+      aggregates: { hot_questions: [], tags: [], active_users: [], frequent_questions: [] },
+    });
     mocks.updateCourse.mockResolvedValue({ ...COURSES[0] });
   });
 
@@ -118,20 +129,20 @@ describe("AdminCoursesView", () => {
     });
   });
 
-  it("编辑 Modal：预填名称/简介为空、编码锁定，PATCH 载荷不含 code 与 description", async () => {
+  it("编辑 Modal：先读取课程详情并预填名称/简介/学期，编码锁定", async () => {
     render(<AdminCoursesView />);
     await screen.findByText("数据库系统");
 
     fireEvent.click(within(screen.getByRole("table")).getAllByRole("button", { name: "编辑" })[0]);
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(mocks.fetchCourseDetail).toHaveBeenCalledWith(7);
 
     const nameInput = screen.getByLabelText("课程名") as HTMLInputElement;
     expect(nameInput.value).toBe("数据库系统");
     const codeInput = screen.getByLabelText("课程编码") as HTMLInputElement;
     expect(codeInput.value).toBe("CS201");
-    // 契约差异：列表条目无 description 字段 → 预填空字符串
     const descriptionInput = screen.getByLabelText("课程简介") as HTMLTextAreaElement;
-    expect(descriptionInput.value).toBe("");
+    expect(descriptionInput.value).toBe("数据库系统课程简介");
     // 后端 CourseUpdateRequest 不收 code → lockCode 置灰
     expect(codeInput.disabled).toBe(true);
 
@@ -144,24 +155,92 @@ describe("AdminCoursesView", () => {
     await waitFor(() => {
       expect(mocks.updateCourse).toHaveBeenCalledWith(7, {
         name: "数据库系统进阶",
+        description: "数据库系统课程简介",
         semester: "2026秋",
       });
     });
     const payload = mocks.updateCourse.mock.calls[0][1] as Record<string, unknown>;
     expect(Object.keys(payload)).not.toContain("code");
-    expect(Object.keys(payload)).not.toContain("description");
+    expect(payload.description).toBe("数据库系统课程简介");
   });
 
-  it("未改动学期时 PATCH 仅提交 name（避免清空列表接口未返回的学期/简介）", async () => {
+  it("未改动字段时仍用详情原值安全提交，不影响已有学期与简介", async () => {
     render(<AdminCoursesView />);
     await screen.findByText("数据库系统");
 
     fireEvent.click(within(screen.getByRole("table")).getAllByRole("button", { name: "编辑" })[0]);
+    await screen.findByRole("dialog");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
-      expect(mocks.updateCourse).toHaveBeenCalledWith(7, { name: "数据库系统" });
+      expect(mocks.updateCourse).toHaveBeenCalledWith(7, {
+        name: "数据库系统",
+        description: "数据库系统课程简介",
+        semester: "2026秋",
+      });
     });
+  });
+
+  it("课程详情加载失败时不打开空白编辑弹窗，并给出明确提示", async () => {
+    mocks.fetchCourseDetail.mockRejectedValue(new Error("课程详情加载失败"));
+    render(<AdminCoursesView />);
+    await screen.findByText("数据库系统");
+
+    fireEvent.click(within(screen.getByRole("table")).getAllByRole("button", { name: "编辑" })[0]);
+
+    expect(await screen.findByText("课程详情加载失败")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("详情返回非预设学期时原样回填，不把值变成空选项", async () => {
+    mocks.fetchCourseDetail.mockResolvedValue({
+      ...COURSES[0],
+      description: "数据库系统课程简介",
+      semester: "2028春",
+      joined: true,
+      is_owner: false,
+      can_post: false,
+      aggregates: { hot_questions: [], tags: [], active_users: [], frequent_questions: [] },
+    });
+    render(<AdminCoursesView />);
+    await screen.findByText("数据库系统");
+
+    fireEvent.click(within(screen.getByRole("table")).getAllByRole("button", { name: "编辑" })[0]);
+    const dialog = await screen.findByRole("dialog");
+
+    expect((within(dialog).getByLabelText("学期") as HTMLSelectElement).value).toBe("2028春");
+  });
+
+  it("课程详情加载中禁用当前编辑按钮并阻止重复请求", async () => {
+    let finishDetail!: (value: unknown) => void;
+    mocks.fetchCourseDetail.mockReturnValue(new Promise((resolve) => {
+      finishDetail = resolve;
+    }));
+    render(<AdminCoursesView />);
+    await screen.findByText("数据库系统");
+
+    const editButton = within(screen.getByRole("table")).getAllByRole("button", { name: "编辑" })[0];
+    fireEvent.click(editButton);
+    fireEvent.click(editButton);
+
+    expect(await screen.findByRole("button", { name: "加载中…" })).toBeTruthy();
+    expect(mocks.fetchCourseDetail).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole("button", { name: "加载中…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    await act(async () => {
+      finishDetail({
+        ...COURSES[0],
+        description: "数据库系统课程简介",
+        semester: "2026秋",
+        joined: true,
+        is_owner: false,
+        can_post: false,
+        aggregates: { hot_questions: [], tags: [], active_users: [], frequent_questions: [] },
+      });
+    });
+    expect(await screen.findByRole("dialog")).toBeTruthy();
   });
 
   it("保存成功：Toast“课程已更新”并刷新列表", async () => {
@@ -169,6 +248,7 @@ describe("AdminCoursesView", () => {
     await screen.findByText("数据库系统");
 
     fireEvent.click(within(screen.getByRole("table")).getAllByRole("button", { name: "编辑" })[0]);
+    await screen.findByRole("dialog");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     expect(await screen.findByText("课程已更新")).toBeTruthy();
@@ -184,6 +264,7 @@ describe("AdminCoursesView", () => {
     await screen.findByText("数据库系统");
 
     fireEvent.click(within(screen.getByRole("table")).getAllByRole("button", { name: "编辑" })[0]);
+    await screen.findByRole("dialog");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     expect(await screen.findByText("没有编辑权限")).toBeTruthy();

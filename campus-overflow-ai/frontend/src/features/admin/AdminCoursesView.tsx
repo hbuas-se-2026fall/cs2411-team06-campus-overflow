@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 
-import { listCourses, updateCourse } from "@/api/courses";
+import { fetchCourseDetail, listCourses, updateCourse } from "@/api/courses";
 import { CourseFormModal, type CourseFormValues } from "@/features/teacher/CourseFormModal";
 import {
   Button,
@@ -18,7 +18,7 @@ import {
   type ToastTone,
 } from "@/shared/components";
 import { toErrorMessage, useAsyncData } from "@/shared/hooks/useAsyncData";
-import type { Course } from "@/shared/types/course";
+import type { Course, CourseDetail } from "@/shared/types/course";
 
 const PAGE_SIZE = 10;
 
@@ -36,9 +36,11 @@ const SEMESTER_FILTER_OPTIONS: SelectOption[] = [
 function AdminCoursesTable({
   courses,
   onEdit,
+  loadingCourseId,
 }: {
   courses: Course[];
   onEdit: (course: Course) => void;
+  loadingCourseId: number | null;
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-line bg-canvas">
@@ -77,8 +79,12 @@ function AdminCoursesTable({
               <td className="py-3 pr-4 text-[13px] text-ink-subtle">—</td>
               <td className="py-3 pr-4 text-[13px] text-ink-muted">{course.question_count}</td>
               <td className="py-3 pr-4">
-                <Button variant="ghost" onClick={() => onEdit(course)}>
-                  编辑
+                <Button
+                  variant="ghost"
+                  disabled={loadingCourseId !== null}
+                  onClick={() => onEdit(course)}
+                >
+                  {loadingCourseId === course.id ? "加载中…" : "编辑"}
                 </Button>
               </td>
             </tr>
@@ -99,6 +105,8 @@ export function AdminCoursesView() {
   const [appliedKeyword, setAppliedKeyword] = useState("");
   const [semester, setSemester] = useState("all");
   const [editTarget, setEditTarget] = useState<Course | null>(null);
+  const [editDetail, setEditDetail] = useState<CourseDetail | null>(null);
+  const [loadingCourseId, setLoadingCourseId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: ToastTone; message: string } | null>(null);
@@ -122,20 +130,33 @@ export function AdminCoursesView() {
     setPage(1);
   }
 
+  async function handleOpenEdit(course: Course): Promise<void> {
+    if (loadingCourseId !== null) return;
+    setLoadingCourseId(course.id);
+    setSubmitError(null);
+    try {
+      const detail = await fetchCourseDetail(course.id);
+      setEditDetail(detail);
+      setEditTarget(course);
+    } catch (caught) {
+      setToast({ tone: "error", message: toErrorMessage(caught) });
+    } finally {
+      setLoadingCourseId(null);
+    }
+  }
+
   async function handleEditSubmit(values: CourseFormValues): Promise<void> {
-    if (editTarget === null) return;
+    if (editTarget === null || editDetail === null) return;
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      // TODO(接口差异)：Course 列表条目无 semester/description 字段 → 无法回填已有值。
-      // 学期未改动（仍为预填 null）时不传 semester，避免 PATCH null 清空后端已有学期；
-      // description 一律不传（传 null 会清空已有简介）；code 后端 CourseUpdateRequest 不收。
-      const payload =
-        values.semester === null
-          ? { name: values.name }
-          : { name: values.name, semester: values.semester };
-      await updateCourse(editTarget.id, payload);
+      await updateCourse(editTarget.id, {
+        name: values.name,
+        description: values.description,
+        semester: values.semester,
+      });
       setEditTarget(null);
+      setEditDetail(null);
       setToast({ tone: "success", message: "课程已更新" });
       setReloadToken((token) => token + 1);
     } catch (caught) {
@@ -196,9 +217,9 @@ export function AdminCoursesView() {
         <AdminCoursesTable
           courses={courses}
           onEdit={(course) => {
-            setSubmitError(null);
-            setEditTarget(course);
+            void handleOpenEdit(course);
           }}
+          loadingCourseId={loadingCourseId}
         />
       ) : null}
 
@@ -220,18 +241,20 @@ export function AdminCoursesView() {
         submitting={isSubmitting}
         submitError={submitError}
         initial={
-          editTarget === null
+          editDetail === null
             ? null
             : {
-                name: editTarget.name,
-                code: editTarget.code,
-                // TODO(接口差异)：列表条目无 description/semester 字段 → 预填空值
-                description: "",
-                semester: null,
+                name: editDetail.name,
+                code: editDetail.code,
+                description: editDetail.description,
+                semester: editDetail.semester,
               }
         }
         onSubmit={(values) => void handleEditSubmit(values)}
-        onClose={() => setEditTarget(null)}
+        onClose={() => {
+          setEditTarget(null);
+          setEditDetail(null);
+        }}
       />
     </div>
   );

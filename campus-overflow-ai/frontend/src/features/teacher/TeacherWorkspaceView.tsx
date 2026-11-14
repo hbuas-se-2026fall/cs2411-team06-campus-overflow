@@ -3,19 +3,21 @@
 import { useState } from "react";
 import Link from "next/link";
 
+import { listCourses } from "@/api/courses";
+import { fetchUserAnswers } from "@/api/users";
 import { EmptyState, TabNav } from "@/shared/components";
 import { USER_ROLE } from "@/shared/constants/domain";
+import { useAsyncData } from "@/shared/hooks/useAsyncData";
 import { useSessionStore } from "@/shared/stores/session-store";
 import { redirectToLogin } from "@/shared/utils/navigation";
 
 import { AssistantCertReviewBoard } from "./AssistantCertReviewBoard";
 
-// TODO(接口差异)：后端无教师聚合指标接口，四个数字一律以"-"占位；接口就绪后接入替换。
-// 导航去向已定：待处理工单/待审核问题页随治理与认证接口落地（/teacher/moderation、/teacher/certify）
 const METRIC_CARDS = [
   { label: "我的课程", href: "/teacher/courses" },
   { label: "待处理工单", href: "/teacher/moderation" },
   { label: "待审核问题", href: "/teacher/certify" },
+  { label: "我的回答", href: "/users" },
 ];
 
 // 工单 Tab 为纯组件状态（页面控件级设计说明 §3.1：不写 URL）
@@ -26,6 +28,40 @@ const CASE_TABS = [
 
 const METRIC_CARD_CLASS =
   "co-focusable flex items-center justify-between rounded-lg border border-line bg-canvas p-4 transition-colors duration-150 ease-standard hover:border-brand-line";
+
+function TeacherMetricCards({ userId }: { userId: number }) {
+  const courses = useAsyncData(
+    () => listCourses({ mine: true, page: 1, page_size: 1 }),
+    [userId],
+  );
+  const answers = useAsyncData(() => fetchUserAnswers(userId, 1), [userId]);
+  const values = [
+    courses.data === null ? "—" : String(courses.data.total),
+    "—",
+    "—",
+    answers.data === null ? "—" : String(answers.data.total),
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      {METRIC_CARDS.map((card, index) => (
+        <Link
+          key={card.label}
+          href={card.label === "我的回答" ? `/users/${userId}` : card.href}
+          className={METRIC_CARD_CLASS}
+        >
+          <span className="flex items-baseline gap-3">
+            <span className="text-[28px] font-semibold leading-none text-ink">{values[index]}</span>
+            <span className="text-[14px] text-ink-muted">{card.label}</span>
+          </span>
+          <span aria-hidden="true" className="text-[16px] text-ink-subtle">
+            →
+          </span>
+        </Link>
+      ))}
+    </div>
+  );
+}
 
 // 教师工作台（页面控件级设计说明 §3.1）：指标卡 2×2 + 左 7 列工单区 + 右 5 列动态调课
 // 登录与教师角色守卫由 src/proxy.ts 服务端完成；guest 态兜底登录引导（同 MePanel 写法）
@@ -53,7 +89,6 @@ export function TeacherWorkspaceView() {
           {METRIC_CARDS.map((card) => (
             <div key={card.href} className="co-skeleton h-[72px] rounded-lg" />
           ))}
-          <div className="co-skeleton h-[72px] rounded-lg" />
         </div>
         <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-12">
           <div className="co-skeleton h-64 rounded-lg lg:col-span-7" />
@@ -63,26 +98,11 @@ export function TeacherWorkspaceView() {
     );
   }
 
-  // "我的回答"去向依赖 me.id，在渲染期与静态卡合并
-  const metricCards = [...METRIC_CARDS, { label: "我的回答", href: `/users/${me.id}` }];
-
   return (
     <div className="flex flex-col gap-5">
       <h2 className="text-[22px] font-semibold text-ink">教师工作台</h2>
 
-      <div className="grid grid-cols-2 gap-4">
-        {metricCards.map((card) => (
-          <Link key={card.label} href={card.href} className={METRIC_CARD_CLASS}>
-            <span className="flex items-baseline gap-3">
-              <span className="text-[28px] font-semibold leading-none text-ink">-</span>
-              <span className="text-[14px] text-ink-muted">{card.label}</span>
-            </span>
-            <span aria-hidden="true" className="text-[16px] text-ink-subtle">
-              →
-            </span>
-          </Link>
-        ))}
-      </div>
+      <TeacherMetricCards key={me.id} userId={me.id} />
 
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-12">
         <section className="flex flex-col gap-3 rounded-lg border border-line bg-canvas p-4 lg:col-span-7">

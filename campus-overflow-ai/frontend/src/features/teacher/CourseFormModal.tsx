@@ -53,6 +53,10 @@ function CourseFormFields({
   const [description, setDescription] = useState(initial?.description ?? "");
   const [nameError, setNameError] = useState("");
   const [codeError, setCodeError] = useState("");
+  const semesterOptions =
+    initial?.semester && !SEMESTER_OPTIONS.some((option) => option.value === initial.semester)
+      ? [...SEMESTER_OPTIONS, { value: initial.semester, label: initial.semester }]
+      : SEMESTER_OPTIONS;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -92,7 +96,7 @@ function CourseFormFields({
       <Select
         label="学期"
         value={semester}
-        options={SEMESTER_OPTIONS}
+        options={semesterOptions}
         onChange={(event) => setSemester(event.target.value)}
       />
       <Textarea

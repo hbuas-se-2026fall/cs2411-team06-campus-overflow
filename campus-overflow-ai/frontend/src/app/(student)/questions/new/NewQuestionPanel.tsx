@@ -1,7 +1,7 @@
 "use client";
 
 // 发布问题表单接线（页面控件级设计说明 §2.6）：createQuestion 成功 → 表单 Toast"发布成功"
-// → 跳转问题详情；未登录访问已由 middleware 拦截
+// → 跳转问题详情；未登录访问已由 src/proxy.ts 拦截
 // 标签两段式提交（E-09 两个写入点）：发布接口 tag_ids 仅收已有标签 id（int），
 // 新自定义标签名（str）在发布成功后走绑定接口内联创建（后端 QuestionTagBindRequest 二态）
 import { useState } from "react";
@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 
 import { JUST_CREATED_QUESTION_KEY } from "@/api/agent-assist";
 import { bindQuestionTags, createQuestion } from "@/api/questions";
-import { Toast, type ToastTone } from "@/shared/components";
+import { Card, Toast, type ToastTone } from "@/shared/components";
 import { SimilarQuestionsCard } from "@/features/agent-assist/SimilarQuestionsCard";
 import { QuestionForm } from "@/features/questions/QuestionForm";
 import {
@@ -18,6 +18,13 @@ import {
   type QuestionDraftValues,
 } from "@/features/questions/draft";
 import type { QuestionCreated } from "@/shared/types/question";
+
+const TIPS = [
+  "用描述性的问题作标题，一句话说清困惑",
+  "补充课程与运行环境，方便对齐上下文",
+  "写清复现步骤或粘贴报错信息",
+  "添加相关标签，让擅长的人看到",
+];
 
 export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number | null }) {
   const router = useRouter();
@@ -38,55 +45,89 @@ export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number 
     tagNames: [],
   });
   return (
-    <>
-      <SimilarQuestionsCard
-        questionTitle={draft.title}
-        questionBody={draft.body}
-        courseId={draft.courseId}
-        onNavigate={() => {
-          saveDraft(NEW_QUESTION_DRAFT_KEY, {
-            title: draft.title,
-            content: draft.body,
-            course_id: draft.courseId,
-            tag_ids: draft.tagIds,
-            tag_names: draft.tagNames,
-          } satisfies QuestionDraftValues);
-        }}
-      />
-      <QuestionForm<QuestionCreated>
-        draftKey={NEW_QUESTION_DRAFT_KEY}
-        initialValues={{ course_id: initialCourseId }}
-        onSubmit={async (values) => {
-          const intTagIds = values.tag_ids?.filter((t): t is number => typeof t === "number");
-          const newTagNames = values.tag_ids?.filter((t): t is string => typeof t === "string");
-          const created = await createQuestion({
-            title: values.title,
-            body: values.body,
-            course_id: values.course_id,
-            tag_ids: intTagIds,
-          });
-          // 只有当前浏览器会话知道“刚创建”的是哪个问题；实际写标签仍由服务端鉴权。
-          try {
-            window.sessionStorage.setItem(JUST_CREATED_QUESTION_KEY, String(created.id));
-          } catch {
-            // 浏览器禁用存储不能反过来把已成功的发布显示为失败。
-          }
-          if (newTagNames && newTagNames.length > 0) {
-            try {
-              await bindQuestionTags(created.id, newTagNames);
-            } catch (error) {
-              // 新标签绑定失败不阻断主流程：问题已发布，进入详情后可重试
-              setBindToast({
-                tone: "error",
-                message: error instanceof Error ? error.message : "新标签绑定失败，可在详情页重试",
-              });
-            }
-          }
-          return created;
-        }}
-        onSuccess={(created) => router.push(`/questions/${created.id}`)}
-        onDraftChange={setDraft}
-      />
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className="min-w-0 lg:col-span-8">
+          <Card isPadded={false} className="p-5">
+            <QuestionForm<QuestionCreated>
+              draftKey={NEW_QUESTION_DRAFT_KEY}
+              initialValues={{ course_id: initialCourseId }}
+              onSubmit={async (values) => {
+                const intTagIds = values.tag_ids?.filter((t): t is number => typeof t === "number");
+                const newTagNames = values.tag_ids?.filter((t): t is string => typeof t === "string");
+                const created = await createQuestion({
+                  title: values.title,
+                  body: values.body,
+                  course_id: values.course_id,
+                  tag_ids: intTagIds,
+                });
+                // 只有当前浏览器会话知道“刚创建”的是哪个问题；实际写标签仍由服务端鉴权。
+                try {
+                  window.sessionStorage.setItem(JUST_CREATED_QUESTION_KEY, String(created.id));
+                } catch {
+                  // 浏览器禁用存储不能反过来把已成功的发布显示为失败。
+                }
+                if (newTagNames && newTagNames.length > 0) {
+                  try {
+                    await bindQuestionTags(created.id, newTagNames);
+                  } catch (error) {
+                    // 新标签绑定失败不阻断主流程：问题已发布，进入详情后可重试
+                    setBindToast({
+                      tone: "error",
+                      message:
+                        error instanceof Error
+                          ? error.message
+                          : "新标签绑定失败，可在详情页重试",
+                    });
+                  }
+                }
+                return created;
+              }}
+              onSuccess={(created) => router.push(`/questions/${created.id}`)}
+              onDraftChange={setDraft}
+            />
+          </Card>
+        </div>
+
+        <aside
+          aria-label="发布辅助信息"
+          className="min-w-0 lg:col-span-4"
+        >
+          <div className="flex flex-col gap-4">
+            <SimilarQuestionsCard
+              questionTitle={draft.title}
+              questionBody={draft.body}
+              courseId={draft.courseId}
+              onNavigate={() => {
+                saveDraft(NEW_QUESTION_DRAFT_KEY, {
+                  title: draft.title,
+                  content: draft.body,
+                  course_id: draft.courseId,
+                  tag_ids: draft.tagIds,
+                  tag_names: draft.tagNames,
+                } satisfies QuestionDraftValues);
+              }}
+            />
+            <Card className="flex flex-col gap-3">
+              <h2 className="text-[15px] font-semibold text-ink">好问题更容易被解答</h2>
+              <ul className="flex flex-col gap-2">
+                {TIPS.map((tip) => (
+                  <li
+                    key={tip}
+                    className="flex items-start gap-2 text-[13px] leading-relaxed text-ink-muted"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
+                    />
+                    {tip}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </div>
+        </aside>
+      </div>
       {bindToast && (
         <Toast
           tone={bindToast.tone}
@@ -94,6 +135,6 @@ export function NewQuestionPanel({ initialCourseId }: { initialCourseId: number 
           onClose={() => setBindToast(null)}
         />
       )}
-    </>
+    </div>
   );
 }
