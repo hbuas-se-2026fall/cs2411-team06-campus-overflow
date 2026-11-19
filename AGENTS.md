@@ -51,6 +51,7 @@ CampusOverflow AI：面向高校课程场景的智能问答平台。三个服务
 6. 界面文案使用简体中文。（一期指后端错误消息与接口描述文案）
 7. 规则必须是可检查的：代码需通过 `ruff check`（后端）、`eslint`（前端/Agent）零 error。
 8. 核心流程必须有测试：后端 pytest、前端与 Agent vitest。（编写要求不变；执行分层为开发期冒烟、CI 全量，见 [.trae/rules/coding-style.md](./.trae/rules/coding-style.md) "测试执行分层"）
+9. **子 Agent 上下文隔离**：Agent 采用主 Agent 编排 + 子 Agent 池，每实例最多 8 个（3 治理 + 5 问答）；任务间不得共享可变上下文、凭证、会话或工具授权，槽位复用必须整体重建；子 Agent 不写共享记忆，外部执行走沙箱。（C-09；设计见 plan AX-R09，任务 SA-01～SA-06 尚未实施）
 
 ## 常用命令
 
@@ -80,7 +81,7 @@ npm run lint                     # Lint
 
 - 后端采用轻量模块化单体，6 个业务模块：identity / courses / qa / interaction / discovery / governance，每模块统一结构 `router.py / service.py / domain.py / repository.py / models.py / schemas.py`（4.5 层：router → service → domain/repository → models；**domain/service 是基座**——domain 零框架依赖、规则集中、设计后冻结；**models 只被本模块 repository import**；discovery 为纯读模块无 domain/repository/models；governance 一期仅建表 + 501 占位；分层规则详见 [docs/后端架构/分层架构设计基线.md](./docs/后端架构/分层架构设计基线.md)，由 `uv run lint-imports` 强制）。
 - **后端目录与结构以 [docs/后端架构说明.md](./docs/后端架构说明.md) 第 7 节为权威**。6 个业务模块均已落地；governance 当前同时承载一期 501 治理占位和 T-12 Agent 内部白名单接口/持久化基础表，T-15 再启用治理业务逻辑。
-- 前端采用三端路由（学生端根路由 / `teacher/**` / `admin/**`）+ BFF 转发（`src/app/api/backend/[...path]`、`src/app/api/agent/[...path]`），页面已进入代码基线并按专项清单补完。Agent 工具注册在 `agent/src/tools/registry.ts`，后端访问统一经 `agent/src/internal-client.ts`；MCP、记忆、审批与观测目录分别作为 T-17/T-14/T-15/T-16 的扩展点（详见 docs/项目骨架分析.md）。
+- 前端采用三端路由（学生端根路由 / `teacher/**` / `admin/**`）+ BFF 转发（`src/app/api/backend/[...path]`、`src/app/api/agent/[...path]`），页面已进入代码基线并按专项清单补完。Agent 工具注册在 `agent/src/tools/registry.ts`，后端访问统一经 `agent/src/internal-client.ts`；`agent/src/orchestrator/` 放槽位调度与运行上下文装配，`agent/src/agents/` 放子 Agent 执行入口；MCP、记忆、审批与观测目录分别作为 T-17/T-14/T-15/T-16 的扩展点（详见 docs/项目骨架分析.md）。
 
 ## 代码风格
 
