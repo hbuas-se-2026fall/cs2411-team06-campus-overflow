@@ -190,6 +190,31 @@ class RunCreateRequest(BaseModel):
     )
     trace_id: str | None = Field(None, max_length=64, description="追踪 id（可选，缺省取请求头）")
     input_summary: str = Field(..., min_length=1, description="输入摘要（不落敏感原文）")
+    actor_kind: Literal["main", "governance", "qa"] | None = Field(
+        None, description="运行来源：主 Agent / 治理子 Agent / 问答子 Agent"
+    )
+    parent_run_id: str | None = Field(
+        None, max_length=64, description="子 Agent 关联的主运行标识"
+    )
+    slot_kind: Literal["governance", "qa"] | None = Field(
+        None, description="槽位类型（子 Agent 运行必填）"
+    )
+    slot_id: str | None = Field(
+        None, min_length=1, max_length=32, description="槽位标识（如 gov-1 / qa-3）"
+    )
+
+    @model_validator(mode="after")
+    def _check_slot_scope(self) -> Self:
+        """主 Agent 不占槽位；子 Agent 必须与所报槽位一致，避免管理端串位。"""
+        if self.actor_kind == "main":
+            if self.slot_kind is not None or self.slot_id is not None:
+                raise ValueError("主 Agent 运行不应携带槽位信息")
+        elif self.actor_kind in ("governance", "qa"):
+            if self.slot_kind != self.actor_kind:
+                raise ValueError("actor_kind 与 slot_kind 不一致")
+            if not self.slot_id:
+                raise ValueError("子 Agent 运行必须携带 slot_id")
+        return self
 
 
 class RunUpdateRequest(BaseModel):
@@ -207,6 +232,10 @@ class AgentRunOut(BaseModel):
 
     id: int
     user_id: int | None = None
+    actor_kind: str | None = None
+    parent_run_id: str | None = None
+    slot_kind: str | None = None
+    slot_id: str | None = None
     task_type: str
     trace_id: str
     agent_run_id: str

@@ -588,7 +588,9 @@ def retract_patrol_note(note_id: int, db: DbSession, trace_id: ServiceAuth) -> d
 def create_run(req: RunCreateRequest, db: DbSession, trace_id: ServiceAuth) -> dict:
     """创建 Agent 运行记录（plan §5 / US-18）：agent_run_id 缺省后端兜底生成。"""
     run = service_internal.create_run(
-        db, req.task_type, req.trace_id or trace_id, req.input_summary, req.agent_run_id
+        db, req.task_type, req.trace_id or trace_id, req.input_summary, req.agent_run_id,
+        actor_kind=req.actor_kind, parent_run_id=req.parent_run_id,
+        slot_kind=req.slot_kind, slot_id=req.slot_id,
     )
     return ok(run.model_dump(), "运行记录已创建")
 
@@ -625,6 +627,8 @@ def create_user_run(
     run = service_internal.create_run(
         db, req.task_type, trace_id, req.input_summary, req.agent_run_id,
         user_id=current_user.id,
+        actor_kind=req.actor_kind, parent_run_id=req.parent_run_id,
+        slot_kind=req.slot_kind, slot_id=req.slot_id,
     )
     return AgentRunResponse(data=run, message="运行记录已创建")
 

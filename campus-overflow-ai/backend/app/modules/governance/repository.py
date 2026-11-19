@@ -308,6 +308,10 @@ def create_patrol_workflow_task(
 def create_run(
     db: Session, task_type: str, trace_id: str, agent_run_id: str, input_summary: str,
     user_id: int | None = None,
+    actor_kind: str | None = None,
+    parent_run_id: str | None = None,
+    slot_kind: str | None = None,
+    slot_id: str | None = None,
 ) -> AgentRunOut:
     """新建运行记录，初始状态 running；agent_run_id 冲突由唯一索引兜底。"""
     run = AgentRun(
@@ -317,6 +321,10 @@ def create_run(
         agent_run_id=agent_run_id,
         input_summary=input_summary,
         status=domain.RUN_STATUS_RUNNING,
+        actor_kind=actor_kind,
+        parent_run_id=parent_run_id,
+        slot_kind=slot_kind,
+        slot_id=slot_id,
     )
     db.add(run)
     db.flush()

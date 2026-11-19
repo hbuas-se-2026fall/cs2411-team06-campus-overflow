@@ -102,6 +102,10 @@ def create_run(
     db: Session, task_type: str, trace_id: str, input_summary: str,
     agent_run_id: str | None = None,
     user_id: int | None = None,
+    actor_kind: str | None = None,
+    parent_run_id: str | None = None,
+    slot_kind: str | None = None,
+    slot_id: str | None = None,
 ) -> AgentRunOut:
     """创建运行记录：agent_run_id 优先取 Agent 上报（T-11 生成），缺省后端兜底。"""
     run_id = agent_run_id or uuid.uuid4().hex
@@ -109,6 +113,10 @@ def create_run(
         run = repository.create_run(
             db, task_type, trace_id, run_id, domain.audit_summary(input_summary) or "",
             user_id=user_id,
+            actor_kind=actor_kind,
+            parent_run_id=parent_run_id,
+            slot_kind=slot_kind,
+            slot_id=slot_id,
         )
         db.commit()
     except IntegrityError:

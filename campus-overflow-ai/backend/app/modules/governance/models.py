@@ -126,6 +126,13 @@ class AgentRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # 归属快照：历史服务运行无用户；不设外键，保留用户删除后的审计标识。
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 运行来源（SA-03）：main / governance / qa；旧记录保持 null
+    actor_kind: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    # 子 Agent 关联的主运行；不设外键，运行标识只作审计关联
+    parent_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # 槽位归属：governance / qa 与槽位标识，供管理端运行池视图关联
+    slot_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    slot_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # 任务类型：suggest_tags / similar_questions / moderation_scan / doc_draft（plan §4）
     task_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     # 跨服务追踪 id（x-trace-id 透传）
