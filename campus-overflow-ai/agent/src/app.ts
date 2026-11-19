@@ -9,9 +9,11 @@ import { registerPatrolConsolidationRoute } from "./routes/patrol-consolidation.
 import { registerPatrolFullScanRoutes } from "./routes/patrol-full-scan.js";
 import { registerPatrolInjectionRoute } from "./routes/patrol-injection.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerPoolRoutes } from "./routes/pool-admin.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerSharedContextRoutes } from "./routes/shared-context.js";
 import { registerSnapshotAdminRoutes } from "./routes/snapshot-admin.js";
+import { AgentPool } from "./runtime/agent-pool.js";
 import type { AgentApp, AppDependencies } from "./routes/support.js";
 
 export type { AppDependencies } from "./routes/support.js";
@@ -22,6 +24,8 @@ export const healthPayload = () => ({
 
 export const createApp = (deps: AppDependencies = {}): AgentApp => {
   const app = new Hono<AgentEnvironment>();
+  // 每应用一个池；SSE 与结构化任务共享同一组槽位
+  const pool = deps.pool ?? new AgentPool();
   // 探针在认证中间件前注册，不依赖数据库、登录态或模型服务。
   app.get("/health", (c) => c.json(healthPayload()));
   app.get("/agent/health", (c) => c.json(healthPayload()));
@@ -33,7 +37,8 @@ export const createApp = (deps: AppDependencies = {}): AgentApp => {
   registerSessionRoutes(app);
   registerSharedContextRoutes(app);
   registerSnapshotAdminRoutes(app);
-  registerChatRoute(app, deps);
-  registerTaskRoutes(app, deps);
+  registerChatRoute(app, { ...deps, pool });
+  registerTaskRoutes(app, { ...deps, pool });
+  registerPoolRoutes(app, pool);
   return app;
 };

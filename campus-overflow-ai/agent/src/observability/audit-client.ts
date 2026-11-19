@@ -7,7 +7,15 @@ export interface AuditEventInput {
   steps?: { step_id: string; tool_name: string }[];
   step_id?: string; tool_name?: string; duration_ms?: number;
 }
-export interface RunCreateInput { agent_run_id: string; task_type: string; input_summary: string }
+export interface RunAttribution {
+  actor_kind: "main" | "governance" | "qa";
+  parent_run_id?: string;
+  slot_kind?: "governance" | "qa";
+  slot_id?: string;
+}
+export interface RunCreateInput extends Partial<RunAttribution> {
+  agent_run_id: string; task_type: string; input_summary: string;
+}
 export interface RunFinishInput { status: "succeeded" | "failed"; output_summary?: string; error_summary?: string }
 const RunAck = z.object({
   id: z.number().int().positive(), user_id: z.number().int().positive().nullable(),
