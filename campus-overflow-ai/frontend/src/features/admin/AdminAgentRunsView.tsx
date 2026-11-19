@@ -5,7 +5,10 @@
 import { useState } from "react";
 import Link from "next/link";
 
-import { fetchAgentRuns } from "@/api/agent-runs";
+import {
+  drainPoolSlot, fetchAgentPool, fetchAgentRuns, terminatePoolSlot,
+  type AgentPoolSlot, type AgentPoolStatus,
+} from "@/api/agent-runs";
 import {
   EmptyState,
   ErrorState,
@@ -32,6 +35,80 @@ const STATUS_LABELS: Record<string, string> = {
   running: "运行中", succeeded: "已成功", failed: "已失败",
 };
 
+const ACTOR_LABELS: Record<string, string> = {
+  main: "主 Agent", governance: "治理子 Agent", qa: "问答子 Agent",
+};
+
+const SLOT_STATE_LABELS: Record<string, string> = {
+  idle: "空闲", leased: "已分配", running: "运行中", draining: "让位中",
+};
+
+function formatWait(milliseconds: number): string {
+  return `${Math.round(milliseconds / 1000)} 秒`;
+}
+
+function AgentPoolPanel({
+  status, onAction,
+}: {
+  status: AgentPoolStatus | null | undefined;
+  onAction: (slotId: string, action: "drain" | "terminate") => void;
+}) {
+  if (!status) return null;
+  const canOperate = (slot: AgentPoolSlot) => slot.state === "running" || slot.state === "leased";
+  return (
+    <div className="mt-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {status.slots.map((slot) => (
+          <div
+            key={slot.slot_id}
+            className={`rounded border p-2 text-[12px] ${
+              slot.state === "idle"
+                ? "border-line-subtle text-ink-subtle"
+                : "border-brand/40 bg-brand/5 text-ink"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono">{slot.slot_id}</span>
+              <span>{SLOT_STATE_LABELS[slot.state] ?? slot.state}</span>
+            </div>
+            {slot.job_id ? (
+              <div className="mt-1 truncate" title={slot.job_id}>{slot.job_id}</div>
+            ) : null}
+            {slot.supporting_governance ? (
+              <div className="mt-1 text-[11px] text-ink-subtle">支援治理</div>
+            ) : null}
+            {canOperate(slot) ? (
+              <div className="mt-2 flex gap-3">
+                {slot.slot_kind === "qa" && slot.supporting_governance ? (
+                  <button
+                    type="button"
+                    className="co-focusable text-[11px] text-brand hover:underline"
+                    onClick={() => onAction(slot.slot_id, "drain")}
+                  >
+                    让位
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="co-focusable text-[11px] text-red-600 hover:underline"
+                  onClick={() => onAction(slot.slot_id, "terminate")}
+                >
+                  终止
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[12px] text-ink-subtle">
+        问答排队 {status.queues.qa.waiting}（最长 {formatWait(status.queues.qa.oldest_wait_ms)}）
+        {" · "}
+        治理排队 {status.queues.governance.waiting}（最长 {formatWait(status.queues.governance.oldest_wait_ms)}）
+      </p>
+    </div>
+  );
+}
+
 export function AdminAgentRunsView() {
   const [status, setStatus] = useState("all");
   const [taskType, setTaskType] = useState("all");
@@ -45,11 +122,46 @@ export function AdminAgentRunsView() {
     }),
     [status, taskType],
   );
+  const poolState = useAsyncData(() => fetchAgentPool(), []);
+  const [poolActionError, setPoolActionError] = useState<string | null>(null);
   const runs = state.data?.items ?? [];
+
+  const runPoolAction = (slotId: string, action: "drain" | "terminate") => {
+    const label = action === "drain" ? "让位" : "终止";
+    const extra = action === "terminate"
+      ? "终止后已执行的后端动作不会回滚。"
+      : "任务会在最近的安全检查点归还。";
+    if (!window.confirm(`确认对槽位 ${slotId} 执行${label}？${extra}`)) return;
+    setPoolActionError(null);
+    void (action === "drain" ? drainPoolSlot(slotId) : terminatePoolSlot(slotId))
+      .then(() => poolState.reload())
+      .catch((error: unknown) => {
+        setPoolActionError(error instanceof Error ? error.message : "运行池操作失败");
+      });
+  };
 
   return (
     <div className="flex flex-col gap-4">
       <h2 className="text-[22px] font-semibold text-ink">Agent 运行记录</h2>
+
+      <section className="rounded-lg border border-line bg-canvas p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-[15px] font-semibold text-ink">运行池</h3>
+          <span className="text-[12px] text-ink-subtle">
+            {poolState.data ? `实例 ${poolState.data.instance_id}` : "3 治理 + 5 问答"}
+          </span>
+        </div>
+        {poolState.isLoading ? (
+          <p className="mt-2 text-[12px] text-ink-subtle">运行池状态加载中…</p>
+        ) : null}
+        {poolState.error ? (
+          <p className="mt-2 text-[12px] text-red-600">运行池状态加载失败：{poolState.error}</p>
+        ) : null}
+        {poolActionError ? (
+          <p className="mt-2 text-[12px] text-red-600">运行池操作失败：{poolActionError}</p>
+        ) : null}
+        <AgentPoolPanel status={poolState.data} onAction={runPoolAction} />
+      </section>
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-[160px]">
@@ -83,6 +195,7 @@ export function AdminAgentRunsView() {
                   <th scope="col" className="py-3 pl-5 pr-4 font-medium">运行 ID</th>
                   <th scope="col" className="py-3 pr-4 font-medium">任务类型</th>
                   <th scope="col" className="py-3 pr-4 font-medium">归属用户</th>
+                  <th scope="col" className="py-3 pr-4 font-medium">来源</th>
                   <th scope="col" className="py-3 pr-4 font-medium">状态</th>
                   <th scope="col" className="py-3 pr-4 font-medium">摘要</th>
                   <th scope="col" className="py-3 pr-4 font-medium">时间</th>
@@ -105,6 +218,11 @@ export function AdminAgentRunsView() {
                     </td>
                     <td className="py-3 pr-4">
                       {run.user_id ? `用户 #${run.user_id}` : "系统"}
+                    </td>
+                    <td className="py-3 pr-4 text-[12px]">
+                      {run.actor_kind
+                        ? `${ACTOR_LABELS[run.actor_kind] ?? run.actor_kind}${run.slot_id ? ` · ${run.slot_id}` : ""}`
+                        : "—"}
                     </td>
                     <td className="py-3 pr-4">
                       <span className={run.status === "failed" ? "text-red-600" : ""}>

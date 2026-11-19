@@ -8,6 +8,10 @@ import type {
 export interface AgentRunItem {
   id: number;
   user_id: number | null;
+  actor_kind: string | null;
+  parent_run_id: string | null;
+  slot_kind: string | null;
+  slot_id: string | null;
   task_type: string;
   trace_id: string;
   agent_run_id: string;
@@ -78,3 +82,62 @@ export function fetchAgentRunTrace(agentRunId: string) {
     `/governance/agent-runs/${encodeURIComponent(agentRunId)}`,
   );
 }
+
+/** 运行池（SA-04）：同源 BFF 转发到 Agent 管理路由。 */
+export type AgentPoolSlotKind = "qa" | "governance";
+export type AgentPoolSlotState = "idle" | "leased" | "running" | "draining";
+
+export interface AgentPoolSlot {
+  slot_id: string;
+  slot_kind: AgentPoolSlotKind;
+  state: AgentPoolSlotState;
+  job_id: string | null;
+  supporting_governance: boolean;
+  started_at: string | null;
+}
+
+export interface AgentPoolQueueStatus {
+  waiting: number;
+  oldest_wait_ms: number;
+}
+
+export interface AgentPoolStatus {
+  instance_id: string;
+  slots: AgentPoolSlot[];
+  queues: Record<AgentPoolSlotKind, AgentPoolQueueStatus>;
+}
+
+export async function fetchAgentPool(): Promise<AgentPoolStatus> {
+  const response = await fetch("/api/agent/agent/admin/pool", { cache: "no-store" });
+  const body = await response.json().catch(() => null) as
+    | { code?: number; data?: unknown; message?: string }
+    | null;
+  if (!response.ok || body?.code !== 200) {
+    throw new Error(body?.message ?? "运行池状态加载失败");
+  }
+  return body.data as AgentPoolStatus;
+}
+
+export interface AgentPoolAction {
+  slot_id: string;
+  action: "drain" | "terminate";
+  accepted: boolean;
+  audit_summary: string;
+}
+
+async function postPoolAction(slotId: string, action: "drain" | "terminate"): Promise<AgentPoolAction> {
+  const response = await fetch(
+    `/api/agent/agent/admin/pool/${encodeURIComponent(slotId)}/${action}`,
+    { method: "POST", cache: "no-store" },
+  );
+  const body = await response.json().catch(() => null) as
+    | { code?: number; data?: unknown; message?: string }
+    | null;
+  if (!response.ok || body?.code !== 200) {
+    throw new Error(body?.message ?? "运行池操作失败");
+  }
+  return body.data as AgentPoolAction;
+}
+
+export const drainPoolSlot = (slotId: string) => postPoolAction(slotId, "drain");
+export const terminatePoolSlot = (slotId: string) => postPoolAction(slotId, "terminate");
