@@ -12,6 +12,7 @@ import {
   Pagination,
   Select,
 } from "@/shared/components";
+import { COMMON_SEMESTER_OPTIONS } from "@/shared/constants/semester";
 import { usePagedList } from "@/shared/hooks/usePagedList";
 import { redirectToLogin } from "@/shared/utils/navigation";
 import type { Course, CourseListParams } from "@/shared/types/course";
@@ -51,10 +52,12 @@ export function CourseListView() {
   );
   const list = usePagedList<Course, CourseListParams>(fetchPage, {});
 
-  // 学期选项从当前页课程数据聚合去重；响应暂无 semester 字段时只有"全部学期"
   const semesterOptions = [
     ALL_SEMESTER,
-    ...collectSemesters(list.items).map((item) => ({ value: item, label: item })),
+    ...COMMON_SEMESTER_OPTIONS,
+    ...collectSemesters(list.items)
+      .filter((item) => !COMMON_SEMESTER_OPTIONS.some((option) => option.value === item))
+      .map((item) => ({ value: item, label: item })),
   ];
 
   function applyKeyword(event: FormEvent<HTMLFormElement>) {
@@ -80,7 +83,7 @@ export function CourseListView() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-[22px] font-semibold text-ink">课程</h1>
         <div className="flex flex-wrap items-center gap-2">
-          {/* 学期筛选走后端 semester 精确参数；选项暂无法从响应聚合时仅剩"全部学期" */}
+          {/* 学期筛选走后端 semester 精确参数；常见学期固定提供，未知后台值动态补入 */}
           <Select
             aria-label="按学期筛选"
             options={semesterOptions}

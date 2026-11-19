@@ -17,6 +17,7 @@ import {
   type SelectOption,
   type ToastTone,
 } from "@/shared/components";
+import { COMMON_SEMESTER_OPTIONS } from "@/shared/constants/semester";
 import { toErrorMessage, useAsyncData } from "@/shared/hooks/useAsyncData";
 import type { Course, CourseDetail } from "@/shared/types/course";
 
@@ -25,11 +26,7 @@ const PAGE_SIZE = 10;
 // 学期筛选为服务端参数（discovery GET /courses 支持 semester）；all=全部不传参
 const SEMESTER_FILTER_OPTIONS: SelectOption[] = [
   { value: "all", label: "全部" },
-  { value: "2025秋", label: "2025 秋" },
-  { value: "2026春", label: "2026 春" },
-  { value: "2026秋", label: "2026 秋" },
-  { value: "2027春", label: "2027 春" },
-  { value: "2027秋", label: "2027 秋" },
+  ...COMMON_SEMESTER_OPTIONS,
 ];
 
 // 课程表（§4.3）：名称 · 课程编码 · 授课教师 · 学期 · 状态 · 问题数 · 操作

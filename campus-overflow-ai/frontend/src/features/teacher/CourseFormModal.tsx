@@ -14,6 +14,7 @@ import {
   Select,
   Textarea,
 } from "@/shared/components";
+import { COMMON_SEMESTER_OPTIONS } from "@/shared/constants/semester";
 
 export interface CourseFormValues {
   name: string;
@@ -22,15 +23,7 @@ export interface CourseFormValues {
   semester: string | null;
 }
 
-// 学期为后端自由字符串（≤20 字），前端提供常用预设，空值=未指定
-export const SEMESTER_OPTIONS = [
-  { value: "", label: "未指定" },
-  { value: "2025秋", label: "2025 秋" },
-  { value: "2026春", label: "2026 春" },
-  { value: "2026秋", label: "2026 秋" },
-  { value: "2027春", label: "2027 春" },
-  { value: "2027秋", label: "2027 秋" },
-];
+const SEMESTER_OPTIONS = [{ value: "", label: "未指定" }, ...COMMON_SEMESTER_OPTIONS];
 
 function CourseFormFields({
   initial,
