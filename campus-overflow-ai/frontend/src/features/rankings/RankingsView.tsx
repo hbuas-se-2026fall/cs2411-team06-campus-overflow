@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { listCourses } from "@/api/courses";
 import { getRank } from "@/api/reputation";
+import { fetchPublicReputation } from "@/api/users";
 import {
   EmptyState,
   ErrorState,
@@ -89,7 +90,20 @@ export function RankingsView({
         course_id:
           tab === "course" && effectiveCourseId !== null ? effectiveCourseId : undefined,
       });
-      return result.items;
+      return Promise.all(
+        result.items.map(async (entry) => {
+          try {
+            const reputation = await fetchPublicReputation(entry.user_id);
+            return {
+              ...entry,
+              question_count: reputation.question_count,
+              answer_count: reputation.answer_count,
+            };
+          } catch {
+            return { ...entry, question_count: null, answer_count: null };
+          }
+        }),
+      );
     },
     [tab, effectiveCourseId],
   );
@@ -184,8 +198,12 @@ export function RankingsView({
                       />
                     </td>
                     <td className="py-3 pr-4 text-[14px] font-medium text-ink">{entry.score}</td>
-                    <td className="py-3 pr-4 text-[13px] text-ink-muted">—</td>
-                    <td className="py-3 pr-4 text-[13px] text-ink-muted">—</td>
+                    <td className="py-3 pr-4 text-[13px] text-ink-muted">
+                      {entry.question_count ?? "—"}
+                    </td>
+                    <td className="py-3 pr-4 text-[13px] text-ink-muted">
+                      {entry.answer_count ?? "—"}
+                    </td>
                     <td className="py-3 pr-4 text-[13px] text-ink-muted">—</td>
                   </tr>
                 );
