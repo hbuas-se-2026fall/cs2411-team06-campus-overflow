@@ -54,6 +54,15 @@ export const createSearchKnowledgeTool = (
         topN: 20,
         courseId,
       });
+      // 重排失败已回退 RRF；这里只记录脱敏诊断，不把整次检索标记为降级。
+      if (result.diagnostics.rerankError) {
+        console.error(JSON.stringify({
+          event: "rag_rerank_degraded",
+          course_id: courseId,
+          candidates: result.diagnostics.rerankCandidates,
+          reason: result.diagnostics.rerankError,
+        }));
+      }
       return {
         configured: true,
         hits: result.hits.map(hit => ({

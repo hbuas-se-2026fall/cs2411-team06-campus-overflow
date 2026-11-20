@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { KnowledgeCatalog } from "../src/knowledge/catalog.js";
 import { createHashEmbeddingProvider } from "../src/knowledge/rag/embedding.js";
+import type { RerankEnvConfig } from "../src/knowledge/rag/rerank.js";
 import { createRagRuntime } from "../src/knowledge/rag/runtime.js";
+import type { RerankProvider } from "../src/knowledge/rag/types.js";
 
 const config = {
   baseUrl: "https://embedding.example/v1",
@@ -49,7 +51,11 @@ const createCatalog = () => {
   };
 };
 
-const createRuntime = (catalog: KnowledgeCatalog, enabled = true) => {
+const createRuntime = (
+  catalog: KnowledgeCatalog,
+  enabled = true,
+  rerankOptions: { rerank?: RerankEnvConfig; reranker?: RerankProvider } = {},
+) => {
   let embedCalls = 0;
   const base = createHashEmbeddingProvider({ dimensions: 64 });
   const runtime = createRagRuntime({
@@ -64,6 +70,11 @@ const createRuntime = (catalog: KnowledgeCatalog, enabled = true) => {
         return base.embed(texts, signal);
       },
     }),
+    resolveRerank: () => rerankOptions.rerank ?? null,
+    createReranker: () => {
+      if (!rerankOptions.reranker) throw new Error("测试未提供 reranker");
+      return rerankOptions.reranker;
+    },
   });
   return { runtime, embedCalls: () => embedCalls };
 };
@@ -123,6 +134,60 @@ describe("RAG 运行时", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     await expect(runtime.getIndex(1)).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("rag_index_prepare_failed"));
+    errorSpy.mockRestore();
+  });
+
+  it("启用重排时索引按精排结果返回", async () => {
+    const { catalog } = createCatalog();
+    const rerankConfig: RerankEnvConfig = {
+      baseUrl: "https://rerank.example/v1",
+      apiKey: "key",
+      model: "test-reranker",
+      timeoutMs: 1000,
+      candidateLimit: 5,
+      minScore: 0,
+      maxTotalChars: 2400,
+    };
+    const rerank = vi.fn(async (_query: string, documents: readonly string[]) =>
+      documents.map((_, index) => ({ index, score: 1 })));
+    const { runtime } = createRuntime(catalog, true, {
+      rerank: rerankConfig,
+      reranker: { model: "test-reranker", rerank },
+    });
+
+    const index = await runtime.getIndex(1);
+    expect(index).toBeDefined();
+    if (!index) throw new Error("索引未构建");
+    const result = await index.search("矩阵");
+    expect(result.diagnostics.rerankApplied).toBe(true);
+    expect(rerank).toHaveBeenCalled();
+  });
+
+  it("重排配置无效时仍构建索引且只告警一次", async () => {
+    const { catalog } = createCatalog();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const runtime = createRagRuntime({
+      getCatalog: () => catalog,
+      enabled: () => true,
+      resolveConfig: () => config,
+      createEmbedder: () => createHashEmbeddingProvider({ dimensions: 64 }),
+      resolveRerank: () => { throw new Error("配置损坏"); },
+      createReranker: () => { throw new Error("不应创建 reranker"); },
+    });
+
+    const index = await runtime.getIndex(1);
+    expect(index).toBeDefined();
+    if (!index) throw new Error("索引未构建");
+    const result = await index.search("矩阵");
+    expect(result.diagnostics.rerankApplied).toBe(false);
+    const warnings = errorSpy.mock.calls
+      .filter(call => String(call[0]).includes("rag_rerank_config_invalid"));
+    expect(warnings).toHaveLength(1);
+
+    await runtime.getIndex(1);
+    const after = errorSpy.mock.calls
+      .filter(call => String(call[0]).includes("rag_rerank_config_invalid"));
+    expect(after).toHaveLength(1);
     errorSpy.mockRestore();
   });
 });

@@ -19,6 +19,12 @@ export interface RerankEnvConfig {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  /** 融合去重后进入精排的候选数 */
+  candidateLimit: number;
+  /** 精排最低分 */
+  minScore: number;
+  /** 最终证据总字符预算 */
+  maxTotalChars: number;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -151,6 +157,21 @@ const parseEnvInteger = (
   return parsed;
 };
 
+const parseEnvNumber = (
+  value: string | undefined,
+  fallback: number,
+  name: string,
+  min: number,
+  max: number,
+): number => {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} 必须是 ${min}～${max} 的数值`);
+  }
+  return parsed;
+};
+
 /**
  * 默认关闭：RAG_ENABLED 与 RAG_RERANK_ENABLED 同时为 "true" 才返回配置。
  * 地址与密钥可回退到 embedding 配置，模型必须显式指定。
@@ -173,6 +194,15 @@ export const resolveRerankConfig = (
     model,
     timeoutMs: parseEnvInteger(
       env.RAG_RERANK_TIMEOUT_MS, 15_000, "RAG_RERANK_TIMEOUT_MS", 1_000, 60_000,
+    ),
+    candidateLimit: parseEnvInteger(
+      env.RAG_RERANK_CANDIDATES, 5, "RAG_RERANK_CANDIDATES", 1, 20,
+    ),
+    minScore: parseEnvNumber(
+      env.RAG_RERANK_MIN_SCORE, 0, "RAG_RERANK_MIN_SCORE", -1_000_000, 1_000_000,
+    ),
+    maxTotalChars: parseEnvInteger(
+      env.RAG_CONTEXT_MAX_CHARS, 2400, "RAG_CONTEXT_MAX_CHARS", 200, 20_000,
     ),
   };
 };

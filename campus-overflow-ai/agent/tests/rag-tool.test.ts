@@ -79,4 +79,29 @@ describe("searchKnowledge 工具", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("rag_tool_search_failed"));
     errorSpy.mockRestore();
   });
+
+  it("重排失败时仍返回 RRF 结果并记录降级诊断", async () => {
+    const index = await RagIndex.build({
+      chunks,
+      embedder: createHashEmbeddingProvider({ dimensions: 64 }),
+      reranker: {
+        model: "broken",
+        rerank: async () => {
+          throw new Error("rerank 服务返回 HTTP 500");
+        },
+      },
+    });
+    const tool = createSearchKnowledgeTool(async () => index, 1);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const result = await tool.execute!({ query: "死锁", limit: 2 }, context) as {
+      configured: boolean;
+      hits: unknown[];
+      degraded?: boolean;
+    };
+    expect(result.configured).toBe(true);
+    expect(result.hits.length).toBeGreaterThan(0);
+    expect(result.degraded).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("rag_rerank_degraded"));
+    errorSpy.mockRestore();
+  });
 });

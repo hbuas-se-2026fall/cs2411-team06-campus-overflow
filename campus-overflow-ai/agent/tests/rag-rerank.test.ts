@@ -165,6 +165,9 @@ describe("rerank 环境配置", () => {
       apiKey: "embedding-key",
       model: "bge-reranker",
       timeoutMs: 15_000,
+      candidateLimit: 5,
+      minScore: 0,
+      maxTotalChars: 2400,
     });
   });
 
@@ -201,5 +204,31 @@ describe("rerank 环境配置", () => {
       RAG_RERANK_API_KEY: "k",
       RAG_RERANK_TIMEOUT_MS: "999",
     })).toThrow("1000～60000");
+  });
+
+  it("读取候选数、阈值与总预算并校验范围", () => {
+    const base = {
+      RAG_ENABLED: "true",
+      RAG_RERANK_ENABLED: "true",
+      RAG_RERANK_MODEL: "m",
+      RAG_RERANK_BASE_URL: "https://rerank.example/v1",
+      RAG_RERANK_API_KEY: "k",
+    };
+    expect(resolveRerankConfig({
+      ...base,
+      RAG_RERANK_CANDIDATES: "3",
+      RAG_RERANK_MIN_SCORE: "-0.5",
+      RAG_CONTEXT_MAX_CHARS: "1800",
+    })).toMatchObject({
+      candidateLimit: 3,
+      minScore: -0.5,
+      maxTotalChars: 1800,
+    });
+    expect(() => resolveRerankConfig({ ...base, RAG_RERANK_CANDIDATES: "0" }))
+      .toThrow("1～20");
+    expect(() => resolveRerankConfig({ ...base, RAG_CONTEXT_MAX_CHARS: "100" }))
+      .toThrow("200～20000");
+    expect(() => resolveRerankConfig({ ...base, RAG_RERANK_MIN_SCORE: "abc" }))
+      .toThrow("数值");
   });
 });
