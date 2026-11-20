@@ -30,13 +30,13 @@ const LOOP_STAGES = [
 const SANDBOXES = [
   {
     name: "测试数据库沙箱",
-    purpose: "真实 MySQL / Postgres 并发、迁移与故障注入验证",
-    boundary: "仅本机端口；不承载真实业务数据",
+    purpose: "验证 MySQL 并发、迁移、故障注入与 Workflow 状态边界",
+    boundary: "仅映射本机端口；使用独立测试数据卷，不承载真实业务数据",
   },
   {
     name: "MCP 隔离沙箱",
-    purpose: "只读 MCP 工具与外部接入隔离验证",
-    boundary: "非 root、只读根文件系统、无数据库凭证、仅本机监听",
+    purpose: "验证只读 MCP 工具与外部客户端接入边界",
+    boundary: "非 root、只读根文件系统、无数据库凭证，仅监听 127.0.0.1:8790",
   },
 ] as const;
 
@@ -118,6 +118,21 @@ export function AgentLoopGovernanceView() {
             </li>
           ))}
         </ol>
+      </Card>
+
+      <Card className="flex flex-col gap-2 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-[16px] font-semibold text-ink">治理预演 dry-run</h3>
+          <span className="rounded-sm bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand-strong">
+            只读预演
+          </span>
+        </div>
+        <p className="text-[13px] leading-relaxed text-ink-muted">
+          复用人工审批前的目标状态与版本校验，只统计预计影响的问答与评论；不会创建工单、写审计或修改目标状态。
+        </p>
+        <p className="rounded-md bg-panel px-3 py-2 text-[12px] text-ink-subtle">
+          版本不一致时拒绝继续；真正执行仍须人工审批，并由业务后端复核后完成。
+        </p>
       </Card>
 
       <section aria-labelledby="sandboxes-title" className="flex flex-col gap-3">

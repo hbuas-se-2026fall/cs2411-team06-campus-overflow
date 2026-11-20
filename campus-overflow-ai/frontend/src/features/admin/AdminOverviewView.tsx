@@ -4,12 +4,13 @@ import { EmptyState } from "@/shared/components";
 
 import { AdminOverviewMetrics } from "./AdminOverviewMetrics";
 
-// 快捷入口卡（§4.1）：五项均对应已开放路由
+// 快捷入口卡（§4.1）：均对应已开放路由
 const QUICK_ENTRIES = [
   { label: "用户治理", description: "检索用户、封禁与解禁", href: "/admin/users" },
   { label: "课程治理", description: "查看与管理全站课程", href: "/admin/courses" },
   { label: "审核队列", description: "处理人工举报与 AI 发起的工单", href: "/admin/moderation/cases" },
   { label: "审批中心", description: "确认或驳回处置工单", href: "/admin/moderation/approvals" },
+  { label: "Agent Loop 治理", description: "查看治理闭环、dry-run 与隔离沙箱", href: "/admin/agent" },
   { label: "Agent 运行", description: "查看运行记录与调用链", href: "/admin/agent/runs" },
 ];
 

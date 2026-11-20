@@ -52,4 +52,20 @@ describe("CourseListView", () => {
       );
     });
   });
+
+  it("从 URL 深链回填关键词与学期并直接用于首屏查询", async () => {
+    render(<CourseListView initialKeyword="数据结构" initialSemester="2026秋" />);
+
+    await waitFor(() => {
+      expect(mocks.listCourses).toHaveBeenCalledWith(
+        expect.objectContaining({
+          keyword: "数据结构",
+          semester: "2026秋",
+          page: 1,
+        }),
+      );
+    });
+    expect((screen.getByLabelText("搜索课程") as HTMLInputElement).value).toBe("数据结构");
+    expect((screen.getByLabelText("按学期筛选") as HTMLSelectElement).value).toBe("2026秋");
+  });
 });

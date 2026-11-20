@@ -69,7 +69,7 @@ describe("AdminOverviewView", () => {
     expect(screen.getByText("3")).toBeTruthy();
   });
 
-  it("快捷入口卡：五个入口均可点导航（含 Agent 运行）", () => {
+  it("快捷入口卡：均可点导航（含 Agent Loop 治理）", () => {
     render(<AdminOverviewView />);
 
     expect(screen.getByRole("link", { name: /用户治理/ }).getAttribute("href")).toBe("/admin/users");
@@ -81,6 +81,9 @@ describe("AdminOverviewView", () => {
       "/admin/moderation/approvals",
     );
 
+    expect(screen.getByRole("link", { name: /Agent Loop 治理/ }).getAttribute("href")).toBe(
+      "/admin/agent",
+    );
     expect(screen.getByRole("link", { name: /Agent 运行/ }).getAttribute("href")).toBe(
       "/admin/agent/runs",
     );

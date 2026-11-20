@@ -133,4 +133,27 @@ describe("CommentList", () => {
       }),
     );
   });
+
+  it("回答评论按当前用户展示删除入口，管理员可删除他人评论", async () => {
+    mocks.listAnswerComments.mockResolvedValue({
+      items: [{
+        ...COMMENTS.items[0],
+        author: "student01",
+        replies: [],
+      }],
+      total: 1,
+      page: 1,
+    });
+    render(
+      <CommentList targetType="answer" targetId={9} currentUsername="student01" />,
+    );
+
+    expect(await screen.findByRole("button", { name: "删除" })).toBeTruthy();
+
+    cleanup();
+    render(
+      <CommentList targetType="answer" targetId={9} currentUsername="admin01" canModerate />,
+    );
+    expect(await screen.findByRole("button", { name: "删除" })).toBeTruthy();
+  });
 });

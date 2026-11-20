@@ -296,6 +296,12 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
             <span className="ml-2 text-[12px] font-normal text-ink-subtle">
               共 {courseMatches.data?.total ?? 0} 门
             </span>
+            <Link
+              href={`/courses?keyword=${encodeURIComponent(activeQuery.keyword.trim())}`}
+              className="co-focusable ml-3 text-[12px] font-normal text-brand hover:underline"
+            >
+              查看全部课程
+            </Link>
           </h2>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {courseMatches.data?.items.map((course) => (

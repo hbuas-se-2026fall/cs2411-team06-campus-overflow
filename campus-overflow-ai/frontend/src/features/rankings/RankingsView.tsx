@@ -3,19 +3,17 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { listCourses } from "@/api/courses";
 import { getRank } from "@/api/reputation";
 import { fetchPublicReputation } from "@/api/users";
+import { CourseSelect } from "@/features/courses/CourseSelect";
 import {
   EmptyState,
   ErrorState,
   LoadingSkeleton,
-  Select,
   TabNav,
   UserLine,
 } from "@/shared/components";
 import { useAsyncData } from "@/shared/hooks/useAsyncData";
-import type { Course } from "@/shared/types/course";
 import type { RankPeriod } from "@/shared/types/reputation";
 
 export type RankingTab = "week" | "month" | "course";
@@ -32,8 +30,6 @@ const TAB_PERIOD: Record<RankingTab, RankPeriod> = {
   month: "month",
   course: "all",
 };
-
-const COURSE_OPTION_LIMIT = 100;
 
 // 前三名红底徽标 + 其余名次纯文本（设计系统语义色）
 const TOP_BADGE =
@@ -59,16 +55,8 @@ export function RankingsView({
   const [tab, setTab] = useState<RankingTab>(initialTab);
   const [courseId, setCourseId] = useState<number | null>(initialCourseId);
 
-  // 课程选项：课程榜 Select 与首课默认选中共用
-  const coursesState = useAsyncData(
-    () => listCourses({ page: 1, page_size: COURSE_OPTION_LIMIT }),
-    [],
-  );
-  const courses: Course[] = coursesState.data?.items ?? [];
-
-  // 课程榜的有效课程 id：未手动选择时派生第一门课（courseId 为空且课程未到时不发榜单请求）
-  const effectiveCourseId =
-    tab === "course" ? (courseId ?? courses[0]?.id ?? null) : null;
+  // 课程榜单首次进入自动选中第一门已加载课程；之后可按关键词搜索或继续加载。
+  const effectiveCourseId = tab === "course" ? courseId : null;
 
   // Tab/课程切换写 URL：period/course_id 直接映射后端查询参数
   useEffect(() => {
@@ -109,6 +97,7 @@ export function RankingsView({
   );
   const entries = rankState.data ?? [];
   const isReady = !rankState.isLoading && rankState.error === null;
+  const waitingForCourse = tab === "course" && effectiveCourseId === null;
 
   function handleTabChange(key: string) {
     if (!isRankingTab(key)) return;
@@ -125,17 +114,12 @@ export function RankingsView({
         <TabNav tabs={RANK_TABS} active={tab} onChange={handleTabChange} className="border-none" />
         {tab === "course" ? (
           <div className="w-full sm:w-64">
-            <Select
-              aria-label="选择课程"
-              value={effectiveCourseId !== null ? String(effectiveCourseId) : ""}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setCourseId(Number.isInteger(value) && value > 0 ? value : null);
-              }}
-              options={courses.map((course) => ({
-                value: String(course.id),
-                label: course.name,
-              }))}
+            <CourseSelect
+              label="选择课程"
+              value={effectiveCourseId ?? undefined}
+              onChange={(next) => setCourseId(next ?? null)}
+              placeholder="请选择课程"
+              autoSelectFirst
             />
           </div>
         ) : null}
@@ -147,7 +131,7 @@ export function RankingsView({
         <ErrorState message={rankState.error} onRetry={rankState.reload} />
       ) : null}
 
-      {isReady && entries.length === 0 ? (
+      {isReady && !waitingForCourse && entries.length === 0 ? (
         <EmptyState
           title="暂无榜单数据"
           description={

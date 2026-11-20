@@ -147,6 +147,9 @@ describe("SearchView", () => {
     expect(within(courseRegion).getByRole("link", { name: "数据结构" }).getAttribute("href")).toBe(
       "/courses/3",
     );
+    expect(within(courseRegion).getByRole("link", { name: "查看全部课程" }).getAttribute("href")).toBe(
+      "/courses?keyword=%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84",
+    );
     const tagRegion = screen.getByRole("region", { name: "相关标签" });
     expect(within(tagRegion).getByRole("link", { name: "标签 数据结构" }).getAttribute("href")).toBe(
       "/tags/10",

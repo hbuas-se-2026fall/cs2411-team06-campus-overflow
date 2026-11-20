@@ -382,6 +382,8 @@ export function QuestionDetailView({
                       onCertify={(id, certified) => void handleCertify(id, certified)}
                       canRecommend={canRecommend}
                       onRecommend={(id, recommended) => void handleRecommend(id, recommended)}
+                      currentUsername={currentUser?.username}
+                      canModerate={currentUser?.role === USER_ROLE.admin}
                     />
                   </li>
                 ))}
@@ -400,6 +402,7 @@ export function QuestionDetailView({
             targetType="question"
             targetId={detail.id}
             currentUsername={currentUser?.username}
+            canModerate={currentUser?.role === USER_ROLE.admin}
           />
         </div>
 

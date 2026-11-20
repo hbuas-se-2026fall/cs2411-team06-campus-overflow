@@ -19,6 +19,8 @@ export function AnswerCard({
   onCertify,
   canRecommend = false,
   onRecommend,
+  currentUsername,
+  canModerate = false,
 }: {
   answer: AnswerListItem;
   canAccept: boolean;
@@ -29,6 +31,8 @@ export function AnswerCard({
   onCertify?: (answerId: number, certified: boolean) => void;
   canRecommend?: boolean;
   onRecommend?: (answerId: number, recommended: boolean) => void;
+  currentUsername?: string | null;
+  canModerate?: boolean;
 }) {
   const [showComments, setShowComments] = useState(false);
   const isCertified = certificationSource === "assistant"
@@ -118,7 +122,12 @@ export function AnswerCard({
         </div>
 
         {showComments ? (
-          <CommentList targetType="answer" targetId={answer.id} />
+          <CommentList
+            targetType="answer"
+            targetId={answer.id}
+            currentUsername={currentUsername}
+            canModerate={canModerate}
+          />
         ) : null}
       </div>
     </article>

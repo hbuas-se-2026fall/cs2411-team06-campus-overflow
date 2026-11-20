@@ -117,4 +117,39 @@ describe("CourseSelect", () => {
     expect(screen.queryByRole("option", { name: /数据结构/ })).toBeNull();
     expect(screen.getByText("正在加载课程…")).toBeTruthy();
   });
+
+  it("autoSelectFirst 只在首次加载后自动选择第一门课程", async () => {
+    mocks.fetchCourses.mockResolvedValue({
+      items: [COURSE],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    });
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <CourseSelect label="选择课程" onChange={onChange} autoSelectFirst />,
+    );
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(1));
+    rerender(
+      <CourseSelect label="选择课程" value={1} onChange={onChange} autoSelectFirst />,
+    );
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("禁用时搜索、选择和加载更多都不可操作", async () => {
+    mocks.fetchCourses.mockResolvedValue({
+      items: [COURSE],
+      total: 60,
+      page: 1,
+      page_size: 50,
+    });
+    render(<CourseSelect label="选择课程" onChange={vi.fn()} disabled />);
+
+    expect((await screen.findByLabelText("搜索课程名或编码") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("选择课程") as HTMLSelectElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /加载更多课程/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
 });

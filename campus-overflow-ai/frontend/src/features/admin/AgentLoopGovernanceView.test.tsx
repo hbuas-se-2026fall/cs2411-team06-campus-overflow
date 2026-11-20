@@ -87,6 +87,8 @@ describe("AgentLoopGovernanceView", () => {
     expect(screen.getByText("MCP 隔离沙箱")).toBeTruthy();
     expect(screen.getAllByText("本地手动启动").length).toBe(2);
     expect(screen.getByText(/未接入在线状态探测/)).toBeTruthy();
+    expect(screen.getByText("治理预演 dry-run")).toBeTruthy();
+    expect(screen.getByText(/不会创建工单、写审计或修改目标状态/)).toBeTruthy();
     expect(screen.queryByText("运行中")).toBeNull();
   });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { fetchCourseDetail, fetchCourses } from "@/api/courses";
 import { ErrorState, LoadingSkeleton } from "@/shared/components";
@@ -20,11 +20,16 @@ export function CourseSelect({
   value,
   onChange,
   placeholder = "请选择课程",
+  disabled = false,
+  autoSelectFirst = false,
 }: {
   label: string;
   value?: number;
   onChange: (id: number | undefined) => void;
   placeholder?: string;
+  disabled?: boolean;
+  /** 无初始选择时，首次加载完成后自动选中第一门课程（排行榜等连续查询场景）。 */
+  autoSelectFirst?: boolean;
 }) {
   const [keyword, setKeyword] = useState("");
   const [items, setItems] = useState<CourseListItem[]>([]);
@@ -32,8 +37,14 @@ export function CourseSelect({
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [reloadToken, setReloadToken] = useState(0);
+  const hasAutoSelected = useRef(value !== undefined);
+  const onChangeRef = useRef(onChange);
   // 深链接带入的课程可能不在当前页，单独取一次详情补进选项
   const [pinned, setPinned] = useState<{ id: number; name: string; code: string } | null>(null);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +63,16 @@ export function CourseSelect({
         setItems((prev) => (page === 1 ? result.items : [...prev, ...result.items]));
         setTotal(result.total);
         setStatus("ready");
+        if (
+          autoSelectFirst &&
+          page === 1 &&
+          keyword.trim() === "" &&
+          !hasAutoSelected.current &&
+          result.items[0]
+        ) {
+          hasAutoSelected.current = true;
+          onChangeRef.current(result.items[0].id);
+        }
       } catch {
         if (!cancelled) setStatus("error");
       }
@@ -59,7 +80,7 @@ export function CourseSelect({
     return () => {
       cancelled = true;
     };
-  }, [keyword, page, reloadToken]);
+  }, [autoSelectFirst, keyword, page, reloadToken]);
 
   /**
    * /questions/new?course_id=75、/rankings?course_id=75 这类深链接：初始课程可能不在第一页。
@@ -105,6 +126,7 @@ export function CourseSelect({
       {searchable ? (
         <input
           value={keyword}
+          disabled={disabled}
           onChange={(event) => {
             const next = event.target.value;
             setKeyword(next);
@@ -115,15 +137,16 @@ export function CourseSelect({
           }}
           placeholder="搜索课程名或编码"
           aria-label="搜索课程名或编码"
-          className="co-focusable h-11 w-full rounded-md border border-line bg-canvas px-3 text-[14px] text-ink transition-colors duration-150 ease-standard placeholder:text-ink-subtle hover:border-ink-subtle focus:border-brand focus:ring-2 focus:ring-brand/20"
+          className="co-focusable h-11 w-full rounded-md border border-line bg-canvas px-3 text-[14px] text-ink transition-colors duration-150 ease-standard placeholder:text-ink-subtle hover:border-ink-subtle focus:border-brand focus:ring-2 focus:ring-brand/20 disabled:cursor-not-allowed disabled:bg-panel disabled:text-ink-subtle"
         />
       ) : null}
 
       <select
+        disabled={disabled}
         value={value ?? ""}
         onChange={(event) => onChange(event.target.value ? Number(event.target.value) : undefined)}
         aria-label={label}
-        className="co-focusable h-11 w-full cursor-pointer rounded-md border border-line bg-canvas px-3 text-[14px] text-ink transition-colors duration-150 ease-standard hover:border-ink-subtle"
+        className="co-focusable h-11 w-full cursor-pointer rounded-md border border-line bg-canvas px-3 text-[14px] text-ink transition-colors duration-150 ease-standard hover:border-ink-subtle disabled:cursor-not-allowed disabled:bg-panel disabled:text-ink-subtle"
       >
         <option value="">{placeholder}</option>
         {pinnedOption ? (
@@ -151,7 +174,7 @@ export function CourseSelect({
       {items.length < total ? (
         <button
           type="button"
-          disabled={status === "loading"}
+          disabled={disabled || status === "loading"}
           onClick={() => setPage((current) => current + 1)}
           className="co-focusable cursor-pointer self-start rounded-md border border-line bg-canvas px-3 py-1.5 text-[13px] text-ink-muted transition-colors duration-150 ease-standard hover:bg-panel disabled:cursor-not-allowed disabled:text-ink-subtle"
         >

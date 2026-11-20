@@ -15,6 +15,12 @@ vi.mock("@/api/reputation", () => ({
 // 课程榜 Select 的课程选项
 vi.mock("@/api/courses", () => ({
   listCourses: mocks.listCourses,
+  fetchCourses: mocks.listCourses,
+  fetchCourseDetail: vi.fn(async (id: number) => ({
+    id,
+    name: `课程 ${id}`,
+    code: `C${id}`,
+  })),
 }));
 vi.mock("@/api/users", () => ({
   fetchPublicReputation: mocks.fetchPublicReputation,

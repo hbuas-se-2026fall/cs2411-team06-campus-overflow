@@ -29,10 +29,12 @@ export function CommentList({
   targetType,
   targetId,
   currentUsername,
+  canModerate = false,
 }: {
   targetType: "question" | "answer";
   targetId: number;
   currentUsername?: string | null;
+  canModerate?: boolean;
 }) {
   const [items, setItems] = useState<CommentListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -147,7 +149,7 @@ export function CommentList({
                 author={comment.author}
                 body={comment.body}
                 createdAt={comment.created_at}
-                canDelete={isAuthorOf(currentUsername, comment.author)}
+                canDelete={canModerate || isAuthorOf(currentUsername, comment.author)}
                 onDelete={() => setDeleteTarget(comment.id)}
                 onReply={() => {
                   setReplyTo(replyTo === comment.id ? null : comment.id);
@@ -163,7 +165,7 @@ export function CommentList({
                         author={reply.author}
                         body={reply.body}
                         createdAt={reply.created_at}
-                        canDelete={isAuthorOf(currentUsername, reply.author)}
+                        canDelete={canModerate || isAuthorOf(currentUsername, reply.author)}
                         onDelete={() => setDeleteTarget(reply.id)}
                       />
                     </li>

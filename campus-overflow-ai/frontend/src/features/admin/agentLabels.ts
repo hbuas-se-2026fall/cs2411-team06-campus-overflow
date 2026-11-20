@@ -7,6 +7,7 @@ export const AGENT_TASK_TYPE_LABELS: Record<string, string> = {
   knowledge_tree: "大纲分析",
   teaching_report: "教学周报",
   moderation_patrol: "静默巡检",
+  approval_request: "审批请求",
 };
 
 export const AGENT_STATUS_LABELS: Record<string, string> = {

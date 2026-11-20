@@ -34,9 +34,15 @@ const ALL_SEMESTER = { value: "", label: "全部学期" };
 
 // 课程列表（页面控件级设计说明 §2.4）：学期 Select + 搜索 Input + 3 列课程卡网格
 // 搜索走后端 GET /courses 的 keyword 参数（名称/编码模糊），不做前端过滤
-export function CourseListView() {
-  const [keywordDraft, setKeywordDraft] = useState("");
-  const [semester, setSemester] = useState("");
+export function CourseListView({
+  initialKeyword = "",
+  initialSemester = "",
+}: {
+  initialKeyword?: string;
+  initialSemester?: string;
+}) {
+  const [keywordDraft, setKeywordDraft] = useState(initialKeyword);
+  const [semester, setSemester] = useState(initialSemester);
 
   // 401（游客）转成哨兵错误，其余原样抛出由 toErrorMessage 转中文
   const fetchPage = useCallback(
@@ -50,7 +56,10 @@ export function CourseListView() {
     },
     [],
   );
-  const list = usePagedList<Course, CourseListParams>(fetchPage, {});
+  const list = usePagedList<Course, CourseListParams>(fetchPage, {
+    keyword: initialKeyword || undefined,
+    semester: initialSemester || undefined,
+  });
 
   const semesterOptions = [
     ALL_SEMESTER,
@@ -59,20 +68,31 @@ export function CourseListView() {
       .filter((item) => !COMMON_SEMESTER_OPTIONS.some((option) => option.value === item))
       .map((item) => ({ value: item, label: item })),
   ];
+  if (
+    initialSemester &&
+    !semesterOptions.some((option) => option.value === initialSemester)
+  ) {
+    semesterOptions.push({ value: initialSemester, label: initialSemester });
+  }
 
   function applyKeyword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    list.setParams({ keyword: keywordDraft.trim() || undefined, semester: semester || undefined });
+    const keyword = keywordDraft.trim();
+    replaceFiltersInUrl(keyword, semester);
+    list.setParams({ keyword: keyword || undefined, semester: semester || undefined });
   }
 
   function handleSemesterChange(next: string) {
     setSemester(next);
-    list.setParams({ keyword: keywordDraft.trim() || undefined, semester: next || undefined });
+    const keyword = keywordDraft.trim();
+    replaceFiltersInUrl(keyword, next);
+    list.setParams({ keyword: keyword || undefined, semester: next || undefined });
   }
 
   function clearFilters() {
     setKeywordDraft("");
     setSemester("");
+    replaceFiltersInUrl("", "");
     list.setParams({ keyword: undefined, semester: undefined });
   }
 
@@ -158,4 +178,12 @@ export function CourseListView() {
       ) : null}
     </section>
   );
+}
+
+function replaceFiltersInUrl(keyword: string, semester: string): void {
+  const params = new URLSearchParams();
+  if (keyword) params.set("keyword", keyword);
+  if (semester) params.set("semester", semester);
+  const query = params.toString();
+  window.history.replaceState(null, "", query ? `/courses?${query}` : "/courses");
 }

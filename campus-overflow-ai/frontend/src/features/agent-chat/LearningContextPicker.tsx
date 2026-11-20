@@ -1,8 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { listCourses } from "@/api/courses";
-import type { CourseListItem } from "@/shared/types/course";
-import { toErrorMessage } from "@/shared/hooks/useAsyncData";
+import { CourseSelect } from "@/features/courses/CourseSelect";
 
 export interface LearningContext { course_id?: number; trusted_tag_ids?: number[] }
 interface Tag { id: number; name: string }
@@ -11,22 +9,16 @@ export function LearningContextPicker({ value, onChange, disabled, canReport }: 
   value: LearningContext; onChange: (value: LearningContext) => void; disabled: boolean; canReport: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [courses, setCourses] = useState<CourseListItem[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [error, setError] = useState("");
   const generation = useRef(0);
   useEffect(() => () => { generation.current++; }, []);
-  const load = async () => {
-    setOpen(true);
-    const key = ++generation.current;
-    try { const result = await listCourses({ page_size: 100 }); if (key === generation.current) setCourses(result.items); }
-    catch (caught) { if (key === generation.current) setError(toErrorMessage(caught)); }
-  };
+  const openPicker = () => setOpen(true);
   const choose = async (courseId: number | undefined) => {
     onChange(courseId ? { course_id: courseId, trusted_tag_ids: [] } : {});
     setTags([]); setError("");
     const key = ++generation.current;
-    if (!courseId) return;
+    if (!courseId || !canReport) return;
     try {
       const response = await fetch(`/api/agent/agent/courses/${courseId}/trusted-tags`, { cache: "no-store" });
       const result = await response.json();
@@ -34,15 +26,17 @@ export function LearningContextPicker({ value, onChange, disabled, canReport }: 
       if (key === generation.current) setTags(result.data);
     } catch { if (key === generation.current) setError("可信标签暂不可用，请稍后重试"); }
   };
-  if (!open) return <button type="button" onClick={() => void load()} disabled={disabled}
+  if (!open) return <button type="button" onClick={openPicker} disabled={disabled}
     className="self-start rounded border border-line px-3 py-2 text-sm">选择课程与匿名学习反馈（可选）</button>;
   return <fieldset className="space-y-2 rounded border border-line p-3" disabled={disabled}>
     <legend className="text-sm">课程与匿名学习反馈</legend>
-    <select aria-label="当前学习课程" value={value.course_id ?? ""} onChange={event => void choose(event.target.value ? Number(event.target.value) : undefined)}
-      className="rounded border border-line p-2 text-sm">
-      <option value="">不限定课程</option>
-      {courses.map(course => <option key={course.id} value={course.id}>{course.name}</option>)}
-    </select>
+    <CourseSelect
+      label="当前学习课程"
+      value={value.course_id}
+      onChange={(courseId) => void choose(courseId)}
+      placeholder="不限定课程"
+      disabled={disabled}
+    />
     {canReport && <>
       <p className="text-xs text-ink-subtle">只向教师汇总你选定的教材／教师标签与次数，不提交聊天原文或个人记忆；不选标签则不生成学习反馈。</p>
       <div className="flex flex-wrap gap-3">{tags.map(tag => <label key={tag.id} className="text-sm">
