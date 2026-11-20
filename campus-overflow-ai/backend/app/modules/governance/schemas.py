@@ -326,6 +326,120 @@ class RunEventResponse(BaseModel):
     message: str = "运行事件已记录"
 
 
+# ---------- 聊天可恢复流（P0-3） ----------
+
+
+class ChatStreamCreateRequest(BaseModel):
+    """幂等创建聊天流：运行标识与 trace 由 Agent 提供，缺省不覆盖已有值。"""
+
+    model_config = {"extra": "forbid"}
+
+    agent_run_id: str | None = Field(None, max_length=64)
+    trace_id: str | None = Field(None, max_length=64)
+
+
+class ChatStreamEventCreateRequest(BaseModel):
+    """按序追加一条聊天事件；data 为原始 SSE data JSON 字符串。"""
+
+    model_config = {"extra": "forbid"}
+
+    seq: int = Field(..., ge=1, le=100_000)
+    event_type: Literal["meta", "delta", "notice", "done", "error"]
+    data: str = Field(..., min_length=1, max_length=200_000)
+
+
+class ChatStreamOut(BaseModel):
+    """聊天流快照；created 仅在 PUT 新建时为 true。"""
+
+    request_id: str
+    status: str
+    cancel_requested: bool
+    agent_run_id: str | None = None
+    trace_id: str | None = None
+    expires_at: datetime
+    created: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class ChatStreamEventItem(BaseModel):
+    seq: int
+    event_type: str
+    data: str
+
+    model_config = {"from_attributes": True}
+
+
+class ChatStreamReadOut(ChatStreamOut):
+    """续接读取：快照 + after 之后的事件（按 seq 升序）。"""
+
+    events: list[ChatStreamEventItem] = Field(default_factory=list)
+
+
+class ChatStreamEventAck(BaseModel):
+    """追加结果；duplicate=true 表示同一序号与内容已存在，未重复写入。"""
+
+    seq: int
+    status: str
+    duplicate: bool = False
+
+
+# ---------- 沙箱执行审计（P0-4） ----------
+
+# 与 Agent sandbox/contracts.ts 的 SandboxReasonCode 保持一致；新增必须先改契约。
+SandboxReasonCode = Literal[
+    "executable_denied",
+    "executable_not_allowed",
+    "argument_rejected",
+    "workspace_escape",
+    "network_denied",
+    "approval_required",
+    "output_limit_exceeded",
+    "timeout",
+    "cancelled",
+    "exec_failed",
+]
+
+
+class SandboxEventCreateRequest(BaseModel):
+    """单条沙箱审计事件：系统级，不接受用户身份字段。"""
+
+    model_config = {"extra": "forbid"}
+
+    event: Literal["sandbox_exec"] = "sandbox_exec"
+    outcome: Literal["denied", "completed", "failed"]
+    tool: str = Field(..., min_length=1, max_length=50)
+    executable: str = Field(..., min_length=1, max_length=128)
+    command_digest: str = Field(..., pattern=r"^[a-f0-9]{16}$")
+    arg_count: int = Field(..., ge=0, le=1000)
+    action_class: Literal["read", "write", "network"]
+    network_mode: Literal["none", "loopback", "allowlist"]
+    trace_id: str | None = Field(None, min_length=1, max_length=64)
+    duration_ms: int = Field(..., ge=0, le=600_000)
+    output_bytes: int = Field(..., ge=0, le=10_485_760)
+    reason_code: SandboxReasonCode | None = None
+
+    @model_validator(mode="after")
+    def _check_reason_and_name(self) -> Self:
+        # 可执行文件只留文件名：出现路径分隔符说明调用方把绝对路径带出来了
+        if "/" in self.executable or "\\" in self.executable:
+            raise ValueError("executable 只能记录文件名")
+        if self.outcome == "completed":
+            if self.reason_code is not None:
+                raise ValueError("completed 不得携带原因码")
+        elif self.reason_code is None:
+            raise ValueError("denied/failed 必须携带原因码")
+        return self
+
+
+class SandboxEventOut(BaseModel):
+    """沙箱审计回执：只回写主键，供 Agent 侧确认已落库。"""
+
+    id: int
+
+    model_config = {"from_attributes": True}
+
+
 # ---------- 审批工单（US-13 / US-14 / C-06） ----------
 
 
@@ -583,3 +697,49 @@ class PatrolNoteOut(PatrolNoteCreateItem):
     trace_id: str
     agent_run_id: str | None = None
     created_at: datetime
+
+
+class SlotLeaseClaimRequest(BaseModel):
+    """跨实例槽位申请：capacity 为同类任务全局容量，由 Agent 配置决定。"""
+
+    kind: Literal["qa", "governance", "maintenance"]
+    capacity: int = Field(..., ge=1, le=64)
+    job_id: str = Field(..., min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9:_-]+$")
+    instance_id: str = Field(
+        ..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9:_.-]+$",
+    )
+    ttl_seconds: int = Field(120, ge=10, le=3600)
+
+
+class SlotLeaseOut(BaseModel):
+    """租约出参：fencing_token 仅返回给持有者，用于续租与释放。"""
+
+    kind: str
+    slot_no: int
+    job_id: str
+    fencing_token: str
+    lease_expires_at: datetime
+
+
+class SlotLeaseTokenRequest(BaseModel):
+    fencing_token: str = Field(..., min_length=1, max_length=64)
+
+
+class SlotLeaseRenewRequest(SlotLeaseTokenRequest):
+    ttl_seconds: int = Field(120, ge=10, le=3600)
+
+
+class SlotWaitRequest(SlotLeaseClaimRequest):
+    """排队申请（P0-5）：wait_seconds 为本次排队最长等待，超时票据作废。"""
+
+    wait_seconds: int = Field(120, ge=10, le=3600)
+
+
+class SlotWaitOut(BaseModel):
+    """排队出参：waiting 带位置，granted 带租约，expired 表示等待已失效。"""
+
+    ticket_id: int
+    job_id: str
+    status: Literal["waiting", "granted", "expired"]
+    position: int | None = None
+    lease: SlotLeaseOut | None = None

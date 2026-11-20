@@ -4,15 +4,20 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import desc, func, or_, update
+from sqlalchemy import and_, case, delete, desc, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.governance import domain
 from app.modules.governance.models import (
+    AgentChatStream,
+    AgentChatStreamEvent,
     AgentExperience,
     AgentMemory,
     AgentRun,
     AgentRunEvent,
+    AgentSandboxEvent,
+    AgentSlotLease,
+    AgentSlotWaiter,
     AnonymousLearningEvent,
     Appeal,
     ApprovalWait,
@@ -31,10 +36,15 @@ from app.modules.governance.schemas import (
     AgentRunOut,
     AppealOut,
     ApprovalWaitOut,
+    ChatStreamEventAck,
+    ChatStreamEventItem,
+    ChatStreamOut,
     MemoryItemOut,
     ModerationCaseOut,
     PatrolNoteOut,
     RunEventOut,
+    SandboxEventCreateRequest,
+    SandboxEventOut,
     ToolCallOut,
 )
 from app.modules.governance.schemas_executions import GovernanceApprovalRecord, GovernanceJobRecord
@@ -912,3 +922,364 @@ def list_injectable_patrol_notes(
 
 def get_patrol_note_row(db: Session, note_id: int) -> PatrolNote | None:
     return db.get(PatrolNote, note_id)
+
+
+def find_claimable_slot(
+    db: Session, kind: str, capacity: int, job_id: str, now: datetime,
+) -> int | None:
+    """找同 kind 下可接管的槽位。
+
+    规则（P0-6）：
+    - 过期且属于其他 job：新任务接管，重试预算重置；
+    - 属于同一 job：顶替/重试均可，但预算必须大于 0（每次 -1）。
+    未过期的其他 job 槽位不可接管，否则全局容量会被绕过。
+    """
+    return db.scalar(
+        select(AgentSlotLease.slot_no)
+        .where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no <= capacity,
+            or_(
+                and_(
+                    AgentSlotLease.lease_expires_at <= now,
+                    AgentSlotLease.job_id != job_id,
+                ),
+                and_(
+                    AgentSlotLease.job_id == job_id,
+                    AgentSlotLease.retry_count > 0,
+                ),
+            ),
+        )
+        .order_by(AgentSlotLease.slot_no)
+        .limit(1)
+    )
+
+
+def claim_slot_row(
+    db: Session, kind: str, slot_no: int, *,
+    owner_instance: str, job_id: str, fencing_token: str,
+    expires_at: datetime, now: datetime,
+) -> bool:
+    """条件更新接管槽位；并发下另一个实例先改则返回 False。
+
+    同一 job 接管时重试预算 -1，其他 job 接管过期槽位时重置为初始预算。
+    """
+    same_job = AgentSlotLease.job_id == job_id
+    result = db.execute(
+        update(AgentSlotLease)
+        .where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no == slot_no,
+            or_(
+                and_(
+                    AgentSlotLease.lease_expires_at <= now,
+                    AgentSlotLease.job_id != job_id,
+                ),
+                and_(same_job, AgentSlotLease.retry_count > 0),
+            ),
+        )
+        .values(
+            owner_instance=owner_instance, job_id=job_id,
+            fencing_token=fencing_token, lease_expires_at=expires_at,
+            retry_count=case(
+                (same_job, AgentSlotLease.retry_count - 1),
+                else_=domain.SLOT_RETRY_BUDGET,
+            ),
+        )
+    )
+    return result.rowcount == 1
+
+
+def has_exhausted_job_lease(db: Session, kind: str, job_id: str) -> bool:
+    """该 job 的重试预算是否已用尽；用尽后不得新开槽位绕过上限。"""
+    return int(db.scalar(
+        select(func.count()).select_from(AgentSlotLease).where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.job_id == job_id,
+            AgentSlotLease.retry_count <= 0,
+        )
+    ) or 0) > 0
+
+
+def count_kind_slots(db: Session, kind: str, capacity: int) -> int:
+    """只统计当前容量内的槽位；容量下调后超出编号的旧行不占新配额。"""
+    return int(db.scalar(
+        select(func.count()).select_from(AgentSlotLease).where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no <= capacity,
+        )
+    ) or 0)
+
+
+def next_free_slot_no(db: Session, kind: str, capacity: int) -> int | None:
+    """取容量内最小空闲编号，释放后立即复用，避免编号空洞导致容量失真。"""
+    used = set(db.scalars(
+        select(AgentSlotLease.slot_no).where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no <= capacity,
+        )
+    ).all())
+    for slot_no in range(1, capacity + 1):
+        if slot_no not in used:
+            return slot_no
+    return None
+
+
+def insert_slot_lease(
+    db: Session, *, kind: str, slot_no: int, owner_instance: str, job_id: str,
+    fencing_token: str, expires_at: datetime,
+) -> None:
+    db.add(AgentSlotLease(
+        kind=kind, slot_no=slot_no, owner_instance=owner_instance,
+        job_id=job_id, fencing_token=fencing_token, lease_expires_at=expires_at,
+        retry_count=domain.SLOT_RETRY_BUDGET,
+    ))
+    db.flush()
+
+
+def renew_slot_lease(
+    db: Session, kind: str, slot_no: int, fencing_token: str,
+    expires_at: datetime, now: datetime,
+) -> bool:
+    """仅未过期且 token 匹配时可续租；过期租约可能已被他人抢占。"""
+    result = db.execute(
+        update(AgentSlotLease)
+        .where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no == slot_no,
+            AgentSlotLease.fencing_token == fencing_token,
+            AgentSlotLease.lease_expires_at > now,
+        )
+        .values(lease_expires_at=expires_at)
+    )
+    return result.rowcount == 1
+
+
+def delete_slot_lease(
+    db: Session, kind: str, slot_no: int, fencing_token: str,
+) -> bool:
+    result = db.execute(
+        delete(AgentSlotLease).where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no == slot_no,
+            AgentSlotLease.fencing_token == fencing_token,
+        )
+    )
+    return result.rowcount == 1
+
+
+# ---------- 全局问答排队（P0-5） ----------
+
+
+def insert_slot_waiter(
+    db: Session, *, kind: str, job_id: str, instance_id: str, capacity: int,
+    ttl_seconds: int, enqueued_at: datetime, expires_at: datetime,
+) -> AgentSlotWaiter:
+    waiter = AgentSlotWaiter(
+        kind=kind, job_id=job_id, instance_id=instance_id, capacity=capacity,
+        ttl_seconds=ttl_seconds, status="waiting",
+        enqueued_at=enqueued_at, expires_at=expires_at,
+    )
+    db.add(waiter)
+    db.flush()
+    return waiter
+
+
+def get_slot_waiter(
+    db: Session, ticket_id: int, for_update: bool = False,
+) -> AgentSlotWaiter | None:
+    query = db.query(AgentSlotWaiter).filter(AgentSlotWaiter.id == ticket_id)
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    return query.first()
+
+
+def find_waiting_head(
+    db: Session, kind: str, for_update: bool = False,
+) -> AgentSlotWaiter | None:
+    """队首：同 kind 中最早入队且仍在等待的票据（严格 FIFO）。"""
+    query = db.query(AgentSlotWaiter).filter(
+        AgentSlotWaiter.kind == kind, AgentSlotWaiter.status == "waiting",
+    ).order_by(AgentSlotWaiter.id)
+    if for_update:
+        query = query.with_for_update()
+    return query.first()
+
+
+def grant_slot_waiter(
+    db: Session, waiter: AgentSlotWaiter, *, slot_no: int, fencing_token: str,
+    now: datetime,
+) -> None:
+    waiter.status = "granted"
+    waiter.slot_no = slot_no
+    waiter.fencing_token = fencing_token
+    waiter.granted_at = now
+    db.flush()
+
+
+def count_waiting_position(db: Session, kind: str, ticket_id: int) -> int:
+    """FIFO 位置：同 kind 中 id 不大于本票据的等待者数量（含自己）。"""
+    return int(db.scalar(
+        select(func.count()).select_from(AgentSlotWaiter).where(
+            AgentSlotWaiter.kind == kind,
+            AgentSlotWaiter.status == "waiting",
+            AgentSlotWaiter.id <= ticket_id,
+        )
+    ) or 0)
+
+
+def delete_slot_waiter(db: Session, waiter: AgentSlotWaiter) -> None:
+    db.delete(waiter)
+    db.flush()
+
+
+# ---------- 聊天可恢复流（P0-3） ----------
+
+
+def delete_expired_chat_streams(db: Session, user_id: int, now: datetime) -> None:
+    """机会式清理该用户已过期流及其事件；过期数据不再对外可见。"""
+    ids = [
+        row.id
+        for row in db.query(AgentChatStream.id).filter(
+            AgentChatStream.user_id == user_id,
+            AgentChatStream.expires_at <= now,
+        ).all()
+    ]
+    if not ids:
+        return
+    db.query(AgentChatStreamEvent).filter(
+        AgentChatStreamEvent.stream_id.in_(ids)
+    ).delete(synchronize_session=False)
+    db.query(AgentChatStream).filter(AgentChatStream.id.in_(ids)).delete(
+        synchronize_session=False
+    )
+    db.flush()
+
+
+def get_chat_stream(
+    db: Session, user_id: int, request_id: str, *, for_update: bool = False,
+) -> ChatStreamOut | None:
+    query = db.query(AgentChatStream).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    )
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    row = query.first()
+    if row is None:
+        return None
+    return ChatStreamOut.model_validate(row)
+
+
+def create_chat_stream(
+    db: Session, user_id: int, request_id: str, agent_run_id: str | None,
+    trace_id: str | None, expires_at: datetime,
+) -> ChatStreamOut:
+    row = AgentChatStream(
+        user_id=user_id, request_id=request_id, agent_run_id=agent_run_id,
+        trace_id=trace_id, status="running", cancel_requested=False,
+        expires_at=expires_at,
+    )
+    db.add(row)
+    db.flush()
+    return ChatStreamOut.model_validate(row)
+
+
+def list_chat_stream_events(
+    db: Session, user_id: int, request_id: str, after: int,
+) -> list[ChatStreamEventItem]:
+    stream_id = db.query(AgentChatStream.id).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).scalar()
+    if stream_id is None:
+        return []
+    rows = db.query(AgentChatStreamEvent).filter(
+        AgentChatStreamEvent.stream_id == stream_id,
+        AgentChatStreamEvent.seq > after,
+    ).order_by(AgentChatStreamEvent.seq).all()
+    return [
+        ChatStreamEventItem(seq=row.seq, event_type=row.event_type, data=row.payload)
+        for row in rows
+    ]
+
+
+def get_chat_stream_event(
+    db: Session, user_id: int, request_id: str, seq: int,
+) -> ChatStreamEventItem | None:
+    stream_id = db.query(AgentChatStream.id).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).scalar()
+    if stream_id is None:
+        return None
+    row = db.query(AgentChatStreamEvent).filter(
+        AgentChatStreamEvent.stream_id == stream_id,
+        AgentChatStreamEvent.seq == seq,
+    ).first()
+    if row is None:
+        return None
+    return ChatStreamEventItem(seq=row.seq, event_type=row.event_type, data=row.payload)
+
+
+def create_chat_stream_event(
+    db: Session, user_id: int, request_id: str, seq: int, event_type: str, data: str,
+) -> ChatStreamEventItem | None:
+    stream_id = db.query(AgentChatStream.id).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).scalar()
+    if stream_id is None:
+        return None
+    row = AgentChatStreamEvent(
+        stream_id=stream_id, seq=seq, event_type=event_type, payload=data,
+    )
+    db.add(row)
+    db.flush()
+    return ChatStreamEventItem(
+        seq=seq, event_type=event_type, data=data,
+    )
+
+
+def update_chat_stream_status(
+    db: Session, user_id: int, request_id: str, status: str,
+) -> None:
+    db.query(AgentChatStream).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).update({"status": status}, synchronize_session=False)
+    db.flush()
+
+
+def mark_chat_stream_cancelled_request(
+    db: Session, user_id: int, request_id: str,
+) -> None:
+    db.query(AgentChatStream).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).update({"cancel_requested": True}, synchronize_session=False)
+    db.flush()
+
+
+def chat_stream_event_ack(seq: int, status: str, duplicate: bool = False) -> ChatStreamEventAck:
+    return ChatStreamEventAck(seq=seq, status=status, duplicate=duplicate)
+
+
+# ---------- 沙箱执行审计（P0-4） ----------
+
+
+def insert_sandbox_event(
+    db: Session, req: SandboxEventCreateRequest, trace_id: str,
+) -> SandboxEventOut:
+    """追加一条沙箱审计；事件只增不改，trace 缺省用服务端透传值。"""
+    row = AgentSandboxEvent(
+        event=req.event, outcome=req.outcome, tool=req.tool,
+        executable=req.executable, command_digest=req.command_digest,
+        arg_count=req.arg_count, action_class=req.action_class,
+        network_mode=req.network_mode, trace_id=trace_id,
+        duration_ms=req.duration_ms, output_bytes=req.output_bytes,
+        reason_code=req.reason_code,
+    )
+    db.add(row)
+    db.flush()
+    return SandboxEventOut.model_validate(row)

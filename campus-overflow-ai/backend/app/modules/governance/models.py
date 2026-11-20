@@ -18,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.modules.governance.domain import SLOT_RETRY_BUDGET
 
 
 class ModerationCase(Base):
@@ -443,3 +444,138 @@ class PatrolNote(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+
+
+class AgentChatStream(Base):
+    """聊天可恢复流（P0-3）：按用户 + 请求 id 幂等登记，30 分钟过期。
+
+    只保存运行状态与事件游标，不保存凭证；内容事件由子表按序追加。
+    cancel_requested 供跨实例运行轮询，运行本身仍由 Agent 实例持有。
+    """
+
+    __tablename__ = "agent_chat_streams"
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_chat_stream_user_request"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # running / succeeded / failed / cancelled
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="running", index=True
+    )
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class AgentChatStreamEvent(Base):
+    """聊天事件追加表：payload 存原始 SSE data JSON，按 (stream_id, seq) 唯一。"""
+
+    __tablename__ = "agent_chat_stream_events"
+    __table_args__ = (
+        UniqueConstraint("stream_id", "seq", name="uq_chat_stream_event_seq"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stream_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_chat_streams.id"), nullable=False, index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    # meta / delta / notice / done / error
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class AgentSandboxEvent(Base):
+    """沙箱执行审计（P0-4）：系统级事件，不归属具体用户。
+
+    只保存命令摘要、参数个数、耗时与输出字节，不落参数正文、URL、
+    stderr 或凭据（C-07/C-08）；denied/failed 必须带固定原因码。
+    """
+
+    __tablename__ = "agent_sandbox_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event: Mapped[str] = mapped_column(String(30), nullable=False, default="sandbox_exec")
+    # denied / completed / failed
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    tool: Mapped[str] = mapped_column(String(50), nullable=False)
+    # 只记录可执行文件名，不记录绝对路径
+    executable: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 16 位 sha256 前缀，不可逆还原参数
+    command_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    arg_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    action_class: Mapped[str] = mapped_column(String(16), nullable=False)
+    network_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # 审计保留策略由运维控制；本批不做自动删除，避免静默丢失证据
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False, index=True
+    )
+
+
+class AgentSlotLease(Base):
+    """跨实例槽位租约（P0-1）：同类任务全局容量由调用方 capacity 控制。
+
+    槽位按 kind 各自编号；释放即删除，过期行在下次 claim 时被原子复用。
+    fencing_token 由后端生成，续租与释放必须匹配，防止旧 worker 在租约
+    失效或被他实例抢占后继续写入。
+    """
+
+    __tablename__ = "agent_slot_leases"
+
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    slot_no: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_instance: Mapped[str] = mapped_column(String(64), nullable=False)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fencing_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, index=True
+    )
+    # 同一 job 的重试预算：顶替/重试各 -1，归零后不可再占用该槽位
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=SLOT_RETRY_BUDGET,
+        server_default=str(SLOT_RETRY_BUDGET),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AgentSlotWaiter(Base):
+    """全局问答排队票据（P0-5）：超限任务按入队顺序等待，而不是立即繁忙。
+
+    票据只保存排队与授予状态，真正并发仍由 agent_slot_leases 控制。
+    授予后由 Agent 轮询取走租约并删除票据，同一票据不可重复使用；
+    等待到期由 expires_at 判定，过期的队首直接作废，不阻塞后续排队。
+    """
+
+    __tablename__ = "agent_slot_waiters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    instance_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    capacity: Mapped[int] = mapped_column(Integer, nullable=False)
+    ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    # waiting / granted
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="waiting")
+    slot_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fencing_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    enqueued_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

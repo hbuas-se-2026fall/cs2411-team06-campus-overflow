@@ -40,6 +40,8 @@ from app.modules.governance.schemas import (
     AgentPrincipalResponse,
     AgentRunResponse,
     ApprovalCreateRequest,
+    ChatStreamCreateRequest,
+    ChatStreamEventCreateRequest,
     DecisionUpdateRequest,
     GovernanceDryRunCreate,
     GovernanceRequestCreate,
@@ -53,6 +55,11 @@ from app.modules.governance.schemas import (
     RunEventCreateRequest,
     RunEventResponse,
     RunUpdateRequest,
+    SandboxEventCreateRequest,
+    SlotLeaseClaimRequest,
+    SlotLeaseRenewRequest,
+    SlotLeaseTokenRequest,
+    SlotWaitRequest,
     ToolCallCreateRequest,
     ToolCallResponse,
 )
@@ -671,6 +678,66 @@ def record_user_run_event(
     return RunEventResponse(data=event)
 
 
+# ---------- 聊天可恢复流（P0-3） ----------
+
+
+@router.put("/user/chat-streams/{request_id}")
+def ensure_user_chat_stream(
+    request_id: uuid.UUID,
+    req: ChatStreamCreateRequest,
+    db: DbSession,
+    trace_id: ServiceAuth,
+    current_user: CurrentUser,
+) -> dict:
+    """幂等登记当前用户的聊天流；已存在时原样返回，不覆盖原运行标识。"""
+    stream = service_internal.ensure_chat_stream(
+        db, current_user.id, str(request_id), req.agent_run_id, req.trace_id or trace_id,
+    )
+    return ok(stream.model_dump(mode="json"), "聊天流已就绪")
+
+
+@router.post("/user/chat-streams/{request_id}/events")
+def append_user_chat_stream_event(
+    request_id: uuid.UUID,
+    req: ChatStreamEventCreateRequest,
+    db: DbSession,
+    _service: ServiceAuth,
+    current_user: CurrentUser,
+) -> dict:
+    """按序追加事件；done/error 置终态，重复序号同内容幂等。"""
+    ack = service_internal.append_chat_stream_event(
+        db, current_user.id, str(request_id), req,
+    )
+    return ok(ack.model_dump(), "事件已记录")
+
+
+@router.get("/user/chat-streams/{request_id}")
+def read_user_chat_stream(
+    request_id: uuid.UUID,
+    db: DbSession,
+    _service: ServiceAuth,
+    current_user: CurrentUser,
+    after: Annotated[int, Query(ge=0)] = 0,
+) -> dict:
+    """续接读取：返回快照与 after 之后的事件；他人的或过期的流一律 404。"""
+    data = service_internal.read_chat_stream(
+        db, current_user.id, str(request_id), after,
+    )
+    return ok(data.model_dump(mode="json"), "success")
+
+
+@router.post("/user/chat-streams/{request_id}/cancel")
+def cancel_user_chat_stream(
+    request_id: uuid.UUID,
+    db: DbSession,
+    _service: ServiceAuth,
+    current_user: CurrentUser,
+) -> dict:
+    """仅 owner 可请求取消；已终止的流保持终态，重复调用幂等。"""
+    stream = service_internal.cancel_chat_stream(db, current_user.id, str(request_id))
+    return ok(stream.model_dump(mode="json"), "取消请求已记录")
+
+
 # ---------- 工单决策（T-16 双环工作流） ----------
 
 @router.patch("/moderation-cases/{case_id}/decision")
@@ -708,3 +775,97 @@ def update_case_decision(
         agent_run_id=agent_run_id,
     )
     return ok(case.model_dump(), "决策已更新")
+
+
+# ---------- 沙箱执行审计（P0-4） ----------
+
+
+@router.post("/sandbox/events")
+def record_sandbox_event(
+    req: SandboxEventCreateRequest, db: DbSession, trace_id: ServiceAuth,
+) -> dict:
+    """记录沙箱执行审计（系统级）：只收摘要与原因码，不接受用户身份。"""
+    event = service_internal.record_sandbox_event(db, req, trace_id)
+    return ok(event.model_dump(), "沙箱审计已记录")
+
+
+@router.post("/slot-leases/claim")
+def claim_slot_lease(
+    req: SlotLeaseClaimRequest, db: DbSession, trace_id: ServiceAuth,
+) -> dict:
+    """跨实例槽位申请（P0-1）：容量满返回 409，供 Agent 明确繁忙而非排队丢失。"""
+    lease = service_internal.claim_slot_lease(db, req)
+    if lease is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="全局槽位已满",
+        )
+    return ok(lease.model_dump(mode="json"), "槽位已占用")
+
+
+@router.post("/slot-leases/{kind}/{slot_no}/renew")
+def renew_slot_lease(
+    kind: Literal["qa", "governance", "maintenance"],
+    slot_no: Annotated[int, Path(ge=1, le=64)],
+    req: SlotLeaseRenewRequest,
+    db: DbSession,
+    trace_id: ServiceAuth,
+) -> dict:
+    """续租：token 不匹配或租约已过期返回 409，旧执行者必须停止写入。"""
+    if not service_internal.renew_slot_lease(
+        db, kind, slot_no, req.fencing_token, req.ttl_seconds,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="租约已失效",
+        )
+    return ok({"renewed": True}, "租约已续期")
+
+
+@router.post("/slot-leases/{kind}/{slot_no}/release")
+def release_slot_lease(
+    kind: Literal["qa", "governance", "maintenance"],
+    slot_no: Annotated[int, Path(ge=1, le=64)],
+    req: SlotLeaseTokenRequest,
+    db: DbSession,
+    trace_id: ServiceAuth,
+) -> dict:
+    """释放槽位：仅持有匹配 token 的执行者可释放。"""
+    if not service_internal.release_slot_lease(
+        db, kind, slot_no, req.fencing_token,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="租约不匹配或已释放",
+        )
+    return ok({"released": True}, "槽位已释放")
+
+
+@router.post("/slot-leases/wait")
+def enqueue_slot_wait(
+    req: SlotWaitRequest, db: DbSession, trace_id: ServiceAuth,
+) -> dict:
+    """全局问答排队（P0-5）：容量已满时入队等待，不立即返回繁忙。"""
+    result = service_internal.enqueue_slot_wait(db, req)
+    message = "已获得槽位" if result.status == "granted" else "已进入排队"
+    if result.status == "expired":
+        message = "排队已过期"
+    return ok(result.model_dump(mode="json", exclude_none=True), message)
+
+
+@router.post("/slot-leases/wait/{ticket_id}/poll")
+def poll_slot_wait(
+    ticket_id: Annotated[int, Path(ge=1)], db: DbSession, trace_id: ServiceAuth,
+) -> dict:
+    """轮询排队结果：授予后返回租约并消费票据，超时返回 expired。"""
+    result = service_internal.poll_slot_wait(db, ticket_id)
+    message = "已获得槽位" if result.status == "granted" else "排队等待中"
+    if result.status == "expired":
+        message = "排队已过期"
+    return ok(result.model_dump(mode="json", exclude_none=True), message)
+
+
+@router.post("/slot-leases/wait/{ticket_id}/cancel")
+def cancel_slot_wait(
+    ticket_id: Annotated[int, Path(ge=1)], db: DbSession, trace_id: ServiceAuth,
+) -> dict:
+    """放弃排队：已授予但未取走的票据同时回收槽位。"""
+    service_internal.cancel_slot_wait(db, ticket_id)
+    return ok({"cancelled": True}, "已退出排队")
