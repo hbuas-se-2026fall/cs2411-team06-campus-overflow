@@ -4,7 +4,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import desc
+from sqlalchemy import desc, func, or_, update
 from sqlalchemy.orm import Session
 
 from app.modules.governance import domain
@@ -21,6 +21,8 @@ from app.modules.governance.models import (
     GovernanceApprovalRequest,
     GovernanceExecutionJob,
     ModerationCase,
+    PatrolNote,
+    PatrolScanJob,
     PatrolWorkflowScan,
     PatrolWorkflowTask,
     ToolCallLog,
@@ -31,6 +33,7 @@ from app.modules.governance.schemas import (
     ApprovalWaitOut,
     MemoryItemOut,
     ModerationCaseOut,
+    PatrolNoteOut,
     RunEventOut,
     ToolCallOut,
 )
@@ -305,6 +308,10 @@ def create_patrol_workflow_task(
 def create_run(
     db: Session, task_type: str, trace_id: str, agent_run_id: str, input_summary: str,
     user_id: int | None = None,
+    actor_kind: str | None = None,
+    parent_run_id: str | None = None,
+    slot_kind: str | None = None,
+    slot_id: str | None = None,
 ) -> AgentRunOut:
     """新建运行记录，初始状态 running；agent_run_id 冲突由唯一索引兜底。"""
     run = AgentRun(
@@ -314,6 +321,10 @@ def create_run(
         agent_run_id=agent_run_id,
         input_summary=input_summary,
         status=domain.RUN_STATUS_RUNNING,
+        actor_kind=actor_kind,
+        parent_run_id=parent_run_id,
+        slot_kind=slot_kind,
+        slot_id=slot_id,
     )
     db.add(run)
     db.flush()
@@ -734,3 +745,170 @@ def save_patrol_scan(db: Session, state: dict, revision: int) -> None:
     row = db.get(PatrolWorkflowScan, "contents")
     row.state, row.revision = state, revision
     db.flush()
+
+
+# ---------- 管理员全量扫描（P2） ----------
+
+
+def get_active_patrol_scan_job(db: Session) -> PatrolScanJob | None:
+    """同一时刻只允许一个排队中或运行中的全量扫描任务。"""
+    return (
+        db.query(PatrolScanJob)
+        .filter(PatrolScanJob.status.in_(("queued", "running")))
+        .first()
+    )
+
+
+def create_patrol_scan_job(
+    db: Session, target_types: list[str], created_by: int | None, trace_id: str
+) -> PatrolScanJob:
+    row = PatrolScanJob(
+        target_types=target_types,
+        created_by=created_by,
+        trace_id=trace_id,
+        active_slot="patrol_scan",
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def get_patrol_scan_job(
+    db: Session, job_id: int, *, for_update: bool = False
+) -> PatrolScanJob | None:
+    query = db.query(PatrolScanJob).filter(PatrolScanJob.id == job_id)
+    if for_update:
+        query = query.with_for_update()
+    return query.first()
+
+
+def try_claim_patrol_scan_job(
+    db: Session, job_id: int, worker_id: str, worker_token: str, expires_at: datetime,
+) -> bool:
+    """数据库级原子认领：条件更新同时完成"检查 + 占用"，跨实例只有一个能成功。
+
+    可认领条件：任务仍在 queued/running，且没有有效租约（无 token / 无过期时间 / 已过期）。
+    MySQL 的 UPDATE 会对命中行加锁并在锁等待后重新判断条件，因此并发认领只有一个 rowcount=1。
+    """
+    now = datetime.now(UTC).replace(tzinfo=None)
+    stmt = (
+        update(PatrolScanJob)
+        .where(
+            PatrolScanJob.id == job_id,
+            PatrolScanJob.status.in_(("queued", "running")),
+            or_(
+                PatrolScanJob.worker_token.is_(None),
+                PatrolScanJob.lease_expires_at.is_(None),
+                PatrolScanJob.lease_expires_at <= now,
+            ),
+        )
+        .values(
+            status="running",
+            started_at=func.coalesce(PatrolScanJob.started_at, now),
+            worker_id=worker_id,
+            worker_token=worker_token,
+            lease_expires_at=expires_at,
+        )
+    )
+    return db.execute(stmt).rowcount == 1
+
+
+def renew_patrol_scan_lease(
+    db: Session, job_id: int, worker_token: str, expires_at: datetime,
+) -> bool:
+    """续租：只有当前 token 且租约尚未过期才能延长，过期后旧 worker 不得复活。"""
+    now = datetime.now(UTC).replace(tzinfo=None)
+    stmt = (
+        update(PatrolScanJob)
+        .where(
+            PatrolScanJob.id == job_id,
+            PatrolScanJob.status == "running",
+            PatrolScanJob.worker_token == worker_token,
+            PatrolScanJob.lease_expires_at.isnot(None),
+            PatrolScanJob.lease_expires_at > now,
+        )
+        .values(lease_expires_at=expires_at)
+    )
+    return db.execute(stmt).rowcount == 1
+
+
+# ---------- 夜间离线整理（N-1/N-2） ----------
+
+
+def list_moderation_cases_since(
+    db: Session, since: datetime, limit: int = 200,
+) -> list[ModerationCase]:
+    """时间窗内工单（含判定与最终处置），供离线整理读取；只读。"""
+    return (
+        db.query(ModerationCase)
+        .filter(ModerationCase.created_at >= since)
+        .order_by(ModerationCase.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_patrol_note_by_key(db: Session, note_key: str) -> PatrolNoteOut | None:
+    """按幂等键查询既有笔记。"""
+    row = db.query(PatrolNote).filter(PatrolNote.note_key == note_key).first()
+    return PatrolNoteOut.model_validate(row) if row is not None else None
+
+
+def create_patrol_note(
+    db: Session, note_key: str, note_type: str, source_case_id: int | None,
+    target_type: str | None, target_id: int | None, rule_version: str,
+    model_version: str, summary: str, confidence: int, valid_until: datetime,
+    trace_id: str, agent_run_id: str | None, evidence_count: int = 1,
+) -> PatrolNoteOut:
+    """写入一条巡检笔记；本层只 flush，提交由 service 负责。"""
+    row = PatrolNote(
+        note_key=note_key, note_type=note_type, source_case_id=source_case_id,
+        target_type=target_type, target_id=target_id, rule_version=rule_version,
+        model_version=model_version, summary=summary, confidence=confidence,
+        evidence_count=evidence_count, valid_until=valid_until, status="active",
+        trace_id=trace_id, agent_run_id=agent_run_id,
+    )
+    db.add(row)
+    db.flush()
+    return PatrolNoteOut.model_validate(row)
+
+
+def expire_patrol_notes(db: Session, now: datetime) -> int:
+    """把已过有效期且仍为 active 的笔记置为 expired；只 flush。"""
+    rows = (
+        db.query(PatrolNote)
+        .filter(PatrolNote.status == "active", PatrolNote.valid_until < now)
+        .all()
+    )
+    for row in rows:
+        row.status = "expired"
+    db.flush()
+    return len(rows)
+
+
+def list_injectable_patrol_notes(
+    db: Session, now: datetime, min_confidence: int, limit: int,
+) -> list[PatrolNote]:
+    """读取可注入的 active 笔记：未过期、置信度达标、证据 ≥2 且属于规则类。
+
+    缺口与目标发现类笔记只交人工确认，不参与注入（C-06）。
+    """
+    return (
+        db.query(PatrolNote)
+        .filter(
+            PatrolNote.status == "active",
+            PatrolNote.valid_until >= now,
+            PatrolNote.confidence >= min_confidence,
+            PatrolNote.evidence_count >= 2,
+            PatrolNote.note_type.in_(
+                ("false_positive", "missed_case", "rule_degradation"),
+            ),
+        )
+        .order_by(PatrolNote.confidence.desc(), PatrolNote.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_patrol_note_row(db: Session, note_id: int) -> PatrolNote | None:
+    return db.get(PatrolNote, note_id)

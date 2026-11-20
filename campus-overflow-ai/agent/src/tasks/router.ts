@@ -1,4 +1,4 @@
-// task router：按 TaskType 分发到对应 handler；第一阶段单 Agent Loop，无多 Agent 协作
+// task router：按 TaskType 分发到对应 handler；子 Agent 池接入前的共享分发基线
 import type { z } from "zod";
 
 import type { LanguageModel } from "ai";
