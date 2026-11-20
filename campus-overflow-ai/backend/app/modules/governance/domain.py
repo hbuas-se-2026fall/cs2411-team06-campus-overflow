@@ -222,6 +222,30 @@ class PatrolTargetUnavailableError(CaseTargetNotReadyError):
     reason_code = "patrol_target_unavailable"
 
 
+class PatrolScanNotFoundError(DomainError):
+    """全量扫描任务不存在。"""
+
+    http_status = 404
+
+
+class PatrolScanConflictError(DomainError):
+    """已有排队中或运行中的全量扫描任务。"""
+
+    http_status = 409
+
+
+class PatrolScanStateError(DomainError):
+    """全量扫描任务状态不允许当前操作。"""
+
+    http_status = 409
+
+
+class PatrolScanLeaseLostError(PatrolScanStateError):
+    """任务租约已过期或被其他 worker 接管，旧 worker 不得继续读写。"""
+
+    http_status = 409
+
+
 class DecisionNotFoundError(DomainError):
     """Agent 决策未找到。"""
 

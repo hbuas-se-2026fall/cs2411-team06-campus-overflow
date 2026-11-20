@@ -28,6 +28,9 @@ export interface CreateRunContextOptions {
   taskType: RunTaskKind;
   /** 上游（前端 BFF / 后端）携带的 trace id；缺省时生成新值 */
   traceId?: string;
+  /** 让位重排后继续累计的预算；缺省时新建，不能让调用方扩大上限 */
+  toolBudget?: ToolCallBudget;
+  repairBudget?: RepairBudget;
 }
 
 export const createRunContext = (options: CreateRunContextOptions): RunContext => {
@@ -35,8 +38,8 @@ export const createRunContext = (options: CreateRunContextOptions): RunContext =
   return Object.freeze({
     principal: options.principal,
     signal: options.signal,
-    toolBudget: createToolCallBudget(),
-    repairBudget: createRepairBudget(),
+    toolBudget: options.toolBudget ?? createToolCallBudget(),
+    repairBudget: options.repairBudget ?? createRepairBudget(),
     evidence: createRunEvidence(),
     agentRunId: asAgentRunId(randomUUID()),
     traceId: asTraceId(incoming ? incoming : randomUUID()),

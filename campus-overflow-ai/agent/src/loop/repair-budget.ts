@@ -2,8 +2,11 @@ export class RepairBudgetError extends Error {
   constructor() { super("self-check failed: 本次运行的返工次数已耗尽"); this.name = "RepairBudgetError"; }
 }
 
-export const createRepairBudget = () => {
-  let used = 0;
+export const createRepairBudget = (initialUsed = 0) => {
+  if (!Number.isInteger(initialUsed) || initialUsed < 0 || initialUsed > 1) {
+    throw new Error("返工预算初始值无效");
+  }
+  let used = initialUsed;
   return Object.freeze({
     get used() { return used; },
     consume: () => { if (used >= 1) throw new RepairBudgetError(); used += 1; },

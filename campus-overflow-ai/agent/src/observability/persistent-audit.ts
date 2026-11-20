@@ -4,7 +4,7 @@ import { RepairBudgetError } from "../loop/repair-budget.js";
 import { PlanBudgetError } from "../loop/run-budget.js";
 import { SelfCheckError } from "../loop/self-check.js";
 import type { PlanList, PlanStep } from "../types/plan.js";
-import type { AuditClient, AuditEventInput } from "./audit-client.js";
+import type { AuditClient, AuditEventInput, RunAttribution } from "./audit-client.js";
 import type { RunContext } from "./run-context.js";
 
 export interface PlanAudit {
@@ -33,7 +33,11 @@ export class PersistentRunAudit implements PlanAudit {
   private terminalAttempted = false;
   private revision = 0;
   private sequence = 0;
-  constructor(private readonly client: AuditClient, readonly run: RunContext) {}
+  constructor(
+    private readonly client: AuditClient,
+    readonly run: RunContext,
+    private readonly attribution?: RunAttribution,
+  ) {}
 
   private async persist<T>(phase: string, action: () => Promise<T>, detached = false): Promise<T> {
     try { return await waitForSignal(detached ? undefined : this.run.signal, action); }
@@ -51,7 +55,8 @@ export class PersistentRunAudit implements PlanAudit {
   async create(): Promise<void> {
     await this.persist("create", async () => {
       const result = await this.client.createRun({ agent_run_id: this.run.agentRunId,
-        task_type: this.run.taskType, input_summary: `用户任务：${this.run.taskType}` }, this.run.traceId);
+        task_type: this.run.taskType, input_summary: `用户任务：${this.run.taskType}`,
+        ...this.attribution }, this.run.traceId);
       this.checkAck(result);
       if (result.user_id !== this.run.principal?.user_id || result.status !== "running") throw new Error("审计归属错误");
       this.created = true;
