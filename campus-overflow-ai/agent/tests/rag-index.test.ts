@@ -41,6 +41,7 @@ describe("RAG 检索", () => {
     expect(body?.keywordRank).toBe(1);
     expect(body?.denseRank).toBeGreaterThan(0);
     expect(result.diagnostics.fusedCandidates).toBeGreaterThan(0);
+    expect(result.diagnostics.expandedCandidates).toBe(0);
     expect(body?.score).toBeCloseTo(1 / 61 + 1 / 61, 6);
   });
 
@@ -78,6 +79,52 @@ describe("RAG 检索", () => {
     const result = await index.search("信号量 PV", { topK: 1 });
 
     expect(result.hits.map(hit => hit.chunkId)).toEqual(["signal#summary", "signal#body-0"]);
+  });
+
+  it("按共享标签补 1 跳关联卡片并标记关系来源", async () => {
+    const tagged: RagChunk[] = [
+      {
+        id: "a#summary", cardId: "a", courseId: 1, kind: "summary", title: "A",
+        text: "alpha 摘要", tagIds: [7],
+      },
+      {
+        id: "a#body-0", cardId: "a", courseId: 1, kind: "body", title: "A",
+        text: "alpha 正文", tagIds: [7],
+      },
+      {
+        id: "b#summary", cardId: "b", courseId: 1, kind: "summary", title: "B",
+        text: "beta 摘要", tagIds: [7],
+      },
+      {
+        id: "b#body-0", cardId: "b", courseId: 1, kind: "body", title: "B",
+        text: "beta 正文", tagIds: [7],
+      },
+      {
+        id: "c#summary", cardId: "c", courseId: 1, kind: "summary", title: "C",
+        text: "gamma 摘要", tagIds: [8],
+      },
+    ];
+    const index = await RagIndex.build({
+      chunks: tagged,
+      embedder: createHashEmbeddingProvider({ dimensions: 64 }),
+    });
+
+    const result = await index.search("alpha", { topK: 2, candidateLimit: 2 });
+
+    expect(new Set(result.hits.map(hit => hit.cardId))).toEqual(new Set(["a", "b"]));
+    expect(result.hits.filter(hit => hit.cardId === "a").every(hit =>
+      hit.relation === undefined)).toBe(true);
+    const related = result.hits.filter(hit => hit.cardId === "b");
+    expect(related).toHaveLength(2);
+    expect(related.every(hit => hit.relation?.type === "shared_tag")).toBe(true);
+    expect(related[0]?.relation).toMatchObject({
+      direction: "symmetric",
+      source: "tag:7",
+      seedCardId: "a",
+      tagId: 7,
+    });
+    expect(result.diagnostics.expandedCandidates).toBe(1);
+    expect(result.diagnostics.expandedHits).toBe(1);
   });
 
   it("多子问题分别检索后按卡片轮转合并", async () => {

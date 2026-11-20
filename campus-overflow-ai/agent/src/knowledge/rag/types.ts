@@ -7,6 +7,17 @@ export interface RagChunk {
   kind: "summary" | "body";
   title?: string;
   text: string;
+  /** 卡片受信标签，用于 1 跳概念关联扩展 */
+  tagIds?: readonly number[];
+}
+
+export interface RagHitRelation {
+  type: "shared_tag";
+  direction: "symmetric";
+  /** 关系来源，如 tag:12 */
+  source: string;
+  seedCardId: string;
+  tagId: number;
 }
 
 export interface EmbeddingProvider {
@@ -87,6 +98,8 @@ export interface RagHit {
   rrfScore: number;
   /** 精排分，仅启用重排时有值 */
   rerankScore?: number;
+  /** 命中来自 1 跳关联扩展时的关系来源 */
+  relation?: RagHitRelation;
   denseRank?: number;
   keywordRank?: number;
 }
@@ -100,6 +113,10 @@ export interface RagSubQueryDiagnostics {
   fusedCandidates: number;
   /** 该子问题召回的不同卡片数 */
   cardCandidates: number;
+  /** 该子问题进入精排的 1 跳扩展候选数 */
+  expandedCandidates: number;
+  /** 合并后来自 1 跳扩展的卡片数 */
+  expandedHits: number;
   rerankApplied: boolean;
   rerankCandidates: number;
   rerankDropped: number;
@@ -122,6 +139,10 @@ export interface RagSearchDiagnostics {
   subQueryCount: number;
   /** 逐子问题明细，顺序与拆解顺序一致 */
   subQueries: RagSubQueryDiagnostics[];
+  /** 进入精排的 1 跳扩展候选数 */
+  expandedCandidates: number;
+  /** 最终结果中来自 1 跳扩展的卡片数 */
+  expandedHits: number;
   rerankApplied: boolean;
   /** 送入重排的候选数 */
   rerankCandidates: number;
