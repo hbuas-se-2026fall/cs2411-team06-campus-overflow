@@ -91,14 +91,14 @@
 
 知识不是一堆等长 chunk，而是“课程 → 卡片 → 摘要/正文”的结构：
 
-- 摘要用于快速召回卡片，正文按段落切块用于取证；
+- 摘要用于快速召回卡片，正文按段落切块用于取证；命中卡片同时返回摘要与定位到的正文，摘要在前、正文在后；
 - 稠密向量（Qwen/GLM OpenAI 兼容 embedding）+ 中文双字 n-gram/BM25 关键词并行召回；
 - RRF 融合，默认 `N=20`、`K=5`、`k=60`，不直接相加不同量纲的原始分数；
-- 可选精排：融合并卡片去重后取 5 个候选，调用 OpenAI 兼容 `/rerank`，阈值过滤后最多取 3 条，总字符预算默认 2400；
+- 可选精排：融合并卡片去重后取 5 个候选，调用 OpenAI 兼容 `/rerank`，阈值过滤后最多取 3 张卡片；工具 `limit` 表示卡片数，每卡最多两条证据；
 - 精排默认关闭（`RAG_RERANK_ENABLED=false`）；超时、HTTP 错误或响应异常时回退 RRF 顺序，不阻断问答；
 - HNSW 内存索引，默认 `M=16`、`efConstruction=200`、`efSearch=64`；规模面向 1～10 本教材，不引入独立向量库；
 - 课程范围在工具闭包绑定，模型不能通过参数换课程；执行前用用户凭证复核课程资料权限；
-- `RAG_ENABLED=false` 默认关闭；索引构建或检索失败只记录脱敏摘要并降级，不阻断问答。
+- `RAG_ENABLED=false` 默认关闭；索引构建或检索失败只记录脱敏摘要并降级，不阻断问答；总字符预算对摘要与正文合计生效。
 
 对应代码：[`agent/src/knowledge/rag/`](./campus-overflow-ai/agent/src/knowledge/rag/)、[`agent/src/tools/search-knowledge.ts`](./campus-overflow-ai/agent/src/tools/search-knowledge.ts)。
 
