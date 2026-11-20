@@ -13,8 +13,10 @@ const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   params: new URLSearchParams(),
   listQuestions: vi.fn(),
-  listCourses: vi.fn(),
+  fetchCourses: vi.fn(),
+  fetchCourseDetail: vi.fn(),
   listTags: vi.fn(),
+  fetchTag: vi.fn(),
   getRank: vi.fn(),
   status: "guest" as "loading" | "authed" | "guest",
 }));
@@ -25,8 +27,14 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/api/questions", () => ({ listQuestions: mocks.listQuestions }));
-vi.mock("@/api/courses", () => ({ listCourses: mocks.listCourses }));
-vi.mock("@/api/tags", () => ({ listTags: mocks.listTags }));
+vi.mock("@/api/courses", () => ({
+  fetchCourses: mocks.fetchCourses,
+  fetchCourseDetail: mocks.fetchCourseDetail,
+}));
+vi.mock("@/api/tags", () => ({
+  listTags: mocks.listTags,
+  fetchTag: mocks.fetchTag,
+}));
 vi.mock("@/api/reputation", () => ({ getRank: mocks.getRank }));
 
 interface SessionShape {
@@ -81,8 +89,15 @@ beforeEach(() => {
   mocks.status = "guest";
   mocks.params = new URLSearchParams();
   mocks.listQuestions.mockReset().mockResolvedValue(makePaged());
-  mocks.listCourses.mockReset().mockResolvedValue({ items: COURSES, total: 2, page: 1, page_size: 100 });
+  mocks.fetchCourses.mockReset().mockResolvedValue({ items: COURSES, total: 2, page: 1, page_size: 50 });
+  mocks.fetchCourseDetail.mockReset().mockResolvedValue({
+    id: 2,
+    name: "操作系统",
+    code: "CS301",
+    teacher_name: "刘老师",
+  });
   mocks.listTags.mockReset().mockResolvedValue({ items: TAGS });
+  mocks.fetchTag.mockReset().mockResolvedValue(TAGS[0]);
   mocks.getRank.mockReset().mockResolvedValue({ items: RANK });
 });
 
@@ -90,7 +105,7 @@ afterEach(cleanup);
 
 async function renderBoard() {
   const utils = render(<QuestionBoard />);
-  // 等待列表与筛选选项加载完成（课程选项多于"全部课程"一项即说明 listCourses 已返回）
+  // 等待列表与筛选选项加载完成（课程选项多于"全部课程"一项即说明课程选择器已返回）
   await screen.findByText(/红黑树的删除操作/);
   await waitFor(() =>
     expect((screen.getByLabelText("按课程筛选") as HTMLSelectElement).options.length).toBeGreaterThan(
@@ -157,7 +172,7 @@ describe("QuestionBoard 筛选状态以 URL 为唯一来源", () => {
     mocks.params = new URLSearchParams("course_id=2&sort=hot&unresolved=1&page=2");
     render(<QuestionBoard />);
 
-    const courseSelect = screen.getByLabelText("按课程筛选") as HTMLSelectElement;
+    const courseSelect = (await screen.findByLabelText("按课程筛选")) as HTMLSelectElement;
     await waitFor(() => expect(courseSelect.value).toBe("2"));
     expect(screen.getByRole("tab", { name: "热门" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "未解决" }).getAttribute("aria-selected")).toBe("true");
@@ -175,7 +190,7 @@ describe("QuestionBoard 列表三态", () => {
     mocks.listQuestions.mockReturnValue(new Promise(() => {}));
     render(<QuestionBoard />);
 
-    expect(screen.getByText("正在加载内容")).toBeTruthy();
+    expect(screen.getAllByText("正在加载内容").length).toBeGreaterThan(0);
     expect(screen.queryByText(/红黑树的删除操作/)).toBeNull();
   });
 

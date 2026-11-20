@@ -19,6 +19,7 @@ export const ADMIN_MENU_ITEMS: AdminMenuItem[] = [
   { key: "moderation-cases", label: "审核队列", href: "/admin/moderation/cases" },
   { key: "moderation-approvals", label: "审批中心", href: "/admin/moderation/approvals" },
   { key: "moderation-appeals", label: "申诉处理", href: "/admin/moderation/appeals" },
+  { key: "agent-loop", label: "Agent Loop 治理", href: "/admin/agent" },
   { key: "agent-assistant", label: "治理助手", href: "/admin/agent/assistant" },
   { key: "agent-runs", label: "Agent 运行", href: "/admin/agent/runs" },
 ];

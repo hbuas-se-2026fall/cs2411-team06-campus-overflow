@@ -77,6 +77,45 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("CourseManageView", () => {
+  it("后端未开放的操作全部禁用并说明原因", async () => {
+    mocks.listCourseQuestions.mockResolvedValue({
+      items: [{
+        id: 9,
+        title: "需要治理的问题",
+        course_id: 1,
+        author: "student01",
+        tags: [],
+        status: "published",
+        vote_score: 0,
+        my_vote: 0,
+        answer_count: 1,
+        view_count: 1,
+        has_accepted: false,
+        created_at: "2026-10-04T14:24:05+08:00",
+      }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+    });
+    render(<CourseManageView courseId={1} />);
+
+    const hide = (await screen.findByRole("button", { name: "隐藏内容" })) as HTMLButtonElement;
+    expect(hide.disabled).toBe(true);
+    expect(hide.title).toContain("教师课程范围工单接口尚未开放");
+
+    fireEvent.click(screen.getByRole("tab", { name: "成员" }));
+    const remove = (await screen.findByRole("button", { name: /移出/ })) as HTMLButtonElement;
+    expect(remove.disabled).toBe(true);
+    expect(remove.title).toContain("教师移出成员接口尚未开放");
+
+    fireEvent.click(screen.getByRole("tab", { name: "标签" }));
+    const tagName = screen.getByLabelText("标签名称") as HTMLInputElement;
+    const create = screen.getByRole("button", { name: "确认" }) as HTMLButtonElement;
+    expect(tagName.disabled).toBe(true);
+    expect(create.disabled).toBe(true);
+    expect(create.title).toContain("新建官方标签接口尚未开放");
+  });
+
   it("负责教师：四个 Tab + 跨端查看 + 编辑/删除入口（§3.3）", async () => {
     render(<CourseManageView courseId={1} />);
 

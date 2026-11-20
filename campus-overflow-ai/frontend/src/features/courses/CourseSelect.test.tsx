@@ -100,4 +100,21 @@ describe("CourseSelect", () => {
     expect(screen.getByRole("option", { name: /编译原理/ })).toBeTruthy();
     expect((screen.getByLabelText("课程榜") as HTMLSelectElement).value).toBe("75");
   });
+
+  it("搜索新关键词时不保留上一轮课程选项", async () => {
+    mocks.fetchCourses.mockResolvedValue({
+      items: [COURSE],
+      total: 120,
+      page: 1,
+      page_size: 50,
+    });
+    render(<CourseSelect label="课程榜" value={undefined} onChange={vi.fn()} placeholder="全部课程" />);
+
+    expect(await screen.findByRole("option", { name: /数据结构/ })).toBeTruthy();
+    mocks.fetchCourses.mockReturnValue(new Promise(() => {}));
+    fireEvent.change(screen.getByLabelText("搜索课程名或编码"), { target: { value: "操作系统" } });
+
+    expect(screen.queryByRole("option", { name: /数据结构/ })).toBeNull();
+    expect(screen.getByText("正在加载课程…")).toBeTruthy();
+  });
 });

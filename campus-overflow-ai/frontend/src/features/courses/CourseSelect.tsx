@@ -81,7 +81,7 @@ export function CourseSelect({
     };
   }, [value, items]);
 
-  if (status === "error") {
+  if (status === "error" && !keyword.trim()) {
     return (
       <ErrorState
         message="课程列表加载失败，请检查网络后重试。"
@@ -90,7 +90,7 @@ export function CourseSelect({
     );
   }
 
-  if (status === "loading" && items.length === 0) {
+  if (status === "loading" && items.length === 0 && !keyword.trim()) {
     return <LoadingSkeleton variant="list" count={1} />;
   }
 
@@ -106,8 +106,12 @@ export function CourseSelect({
         <input
           value={keyword}
           onChange={(event) => {
-            setKeyword(event.target.value);
+            const next = event.target.value;
+            setKeyword(next);
             setPage(1);
+            setItems([]);
+            setTotal(0);
+            setStatus(next.trim() ? "loading" : "ready");
           }}
           placeholder="搜索课程名或编码"
           aria-label="搜索课程名或编码"
@@ -136,6 +140,12 @@ export function CourseSelect({
 
       {status === "ready" && items.length === 0 ? (
         <p className="text-[12px] text-ink-subtle">没有匹配的课程，换个关键词试试。</p>
+      ) : null}
+      {status === "loading" && keyword.trim() ? (
+        <p className="text-[12px] text-ink-subtle">正在加载课程…</p>
+      ) : null}
+      {status === "error" && keyword.trim() ? (
+        <p className="text-[12px] text-danger-ink">课程加载失败，请重试</p>
       ) : null}
 
       {items.length < total ? (

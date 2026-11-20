@@ -16,6 +16,8 @@ import {
 } from "@/shared/components";
 import { useAsyncData } from "@/shared/hooks/useAsyncData";
 
+import { AGENT_STATUS_LABELS, AGENT_TASK_TYPE_LABELS } from "./agentLabels";
+
 const PAGE_SIZE = 20;
 
 const STATUS_TABS = [
@@ -24,16 +26,6 @@ const STATUS_TABS = [
   { key: "succeeded", label: "已成功" },
   { key: "failed", label: "已失败" },
 ];
-
-const TASK_TYPE_LABELS: Record<string, string> = {
-  chat: "智能问答", suggest_tags: "标签推荐", similar_questions: "相似问题",
-  moderation_scan: "风险扫描", doc_draft: "文档草稿", knowledge_tree: "大纲分析",
-  teaching_report: "教学周报", moderation_patrol: "静默巡检",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  running: "运行中", succeeded: "已成功", failed: "已失败",
-};
 
 export function AdminAgentRunsView() {
   const [status, setStatus] = useState("all");
@@ -66,7 +58,7 @@ export function AdminAgentRunsView() {
             }}
             options={[
               { value: "all", label: "全部类型" },
-              ...Object.entries(TASK_TYPE_LABELS).map(([value, label]) => ({
+              ...Object.entries(AGENT_TASK_TYPE_LABELS).map(([value, label]) => ({
                 value, label,
               })),
             ]}
@@ -115,14 +107,14 @@ export function AdminAgentRunsView() {
                       {run.agent_run_id.slice(0, 8)}…
                     </td>
                     <td className="py-3 pr-4">
-                      {TASK_TYPE_LABELS[run.task_type] ?? run.task_type}
+                      {AGENT_TASK_TYPE_LABELS[run.task_type] ?? run.task_type}
                     </td>
                     <td className="py-3 pr-4">
                       {run.user_id ? `用户 #${run.user_id}` : "系统"}
                     </td>
                     <td className="py-3 pr-4">
                       <span className={run.status === "failed" ? "text-red-600" : ""}>
-                        {STATUS_LABELS[run.status] ?? run.status}
+                        {AGENT_STATUS_LABELS[run.status] ?? run.status}
                       </span>
                       {run.error_summary ? (
                         <span className="ml-2 text-[12px] text-ink-subtle" title={run.error_summary}>
