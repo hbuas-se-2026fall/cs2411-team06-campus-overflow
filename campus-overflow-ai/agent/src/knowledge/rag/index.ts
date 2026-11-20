@@ -1,4 +1,4 @@
-/** RAG 检索主干：HNSW 稠密召回 + BM25 关键词召回 + RRF 融合。 */
+/** RAG 检索主干：HNSW 稠密召回 + BM25 关键词召回 + RRF 融合 + 可选精排。 */
 
 import { Bm25Index } from "./bm25.js";
 import { HnswIndex } from "./hnsw.js";
@@ -10,12 +10,33 @@ import type {
   RagIndexOptions,
   RagSearchOptions,
   RagSearchResult,
+  RerankProvider,
 } from "./types.js";
 
-const assertRange = (value: number, name: string, min: number, max: number): void => {
+const assertRange = (value: number, name: string, min: number, max: number): number => {
   if (!Number.isInteger(value) || value < min || value > max) {
     throw new Error(`${name} 必须是 ${min}～${max} 的整数`);
   }
+  return value;
+};
+
+const assertFinite = (value: number, name: string): number => {
+  if (!Number.isFinite(value)) throw new Error(`${name} 必须是有限数值`);
+  return value;
+};
+
+/** 截断后剩余字符低于该值时不保留残片，避免把半句话当证据。 */
+const MIN_TRUNCATED_CHARS = 200;
+
+const classifyRerankError = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  const httpStatus = /HTTP (\d{3})/.exec(message)?.[1];
+  if (httpStatus) return `http_${httpStatus}`;
+  if (message.includes("超时")) return "timeout";
+  if (message.includes("格式") || message.includes("索引") || message.includes("分数")) {
+    return "invalid_response";
+  }
+  return "unknown";
 };
 
 interface FusedChunk {
@@ -23,6 +44,10 @@ interface FusedChunk {
   score: number;
   denseRank?: number;
   keywordRank?: number;
+}
+
+interface RankedChunk extends FusedChunk {
+  rerankScore?: number;
 }
 
 export class RagIndex {
@@ -33,6 +58,11 @@ export class RagIndex {
     private readonly hnsw: HnswIndex,
     private readonly bm25: Bm25Index,
     private readonly rrfK: number,
+    private readonly reranker: RerankProvider | undefined,
+    private readonly candidateLimit: number,
+    private readonly minRerankScore: number,
+    private readonly maxChunksPerCard: number,
+    private readonly maxTotalChars: number,
   ) {}
 
   static async build(options: RagIndexOptions): Promise<RagIndex> {
@@ -60,8 +90,11 @@ export class RagIndex {
       id: chunk.id,
       tokens: tokenize(`${chunk.title ?? ""} ${chunk.text}`),
     })));
-    const rrfK = options.rrfK ?? 60;
-    assertRange(rrfK, "RRF k", 1, 1000);
+    const rrfK = assertRange(options.rrfK ?? 60, "RRF k", 1, 1000);
+    const candidateLimit = assertRange(options.candidateLimit ?? 5, "candidateLimit", 1, 50);
+    const maxChunksPerCard = assertRange(options.maxChunksPerCard ?? 1, "maxChunksPerCard", 1, 10);
+    const maxTotalChars = assertRange(options.maxTotalChars ?? 2400, "maxTotalChars", 1, 1_000_000);
+    const minRerankScore = assertFinite(options.minRerankScore ?? 0, "minRerankScore");
     return new RagIndex(
       options.chunks,
       new Map(options.chunks.map(chunk => [chunk.id, chunk])),
@@ -69,6 +102,11 @@ export class RagIndex {
       hnsw,
       bm25,
       rrfK,
+      options.reranker,
+      candidateLimit,
+      minRerankScore,
+      maxChunksPerCard,
+      maxTotalChars,
     );
   }
 
@@ -83,6 +121,18 @@ export class RagIndex {
     const topK = options.topK ?? 5;
     assertRange(topN, "topN", 1, 1000);
     assertRange(topK, "topK", 1, topN);
+    const candidateLimit = assertRange(
+      options.candidateLimit ?? this.candidateLimit, "candidateLimit", 1, 50,
+    );
+    const maxChunksPerCard = assertRange(
+      options.maxChunksPerCard ?? this.maxChunksPerCard, "maxChunksPerCard", 1, 10,
+    );
+    const maxTotalChars = assertRange(
+      options.maxTotalChars ?? this.maxTotalChars, "maxTotalChars", 1, 1_000_000,
+    );
+    const minRerankScore = assertFinite(
+      options.minRerankScore ?? this.minRerankScore, "minRerankScore",
+    );
 
     // 课程过滤在召回后执行，先多取一些候选，避免过滤后不足 topN。
     const fetchSize = options.courseId
@@ -119,24 +169,112 @@ export class RagIndex {
 
     const ordered = [...fused.values()].sort((left, right) =>
       right.score - left.score || left.chunk.id.localeCompare(right.chunk.id));
-    const hits: RagHit[] = ordered.slice(0, topK).map(item => ({
-      chunkId: item.chunk.id,
-      cardId: item.chunk.cardId,
-      courseId: item.chunk.courseId,
-      kind: item.chunk.kind,
-      title: item.chunk.title,
-      text: item.chunk.text,
-      score: item.score,
-      denseRank: item.denseRank,
-      keywordRank: item.keywordRank,
-    }));
+    const cardCandidates = new Set(ordered.map(item => item.chunk.cardId)).size;
+    const candidates = this.pickCandidates(ordered, candidateLimit, maxChunksPerCard);
+
+    let ranked: RankedChunk[] = candidates;
+    let rerankApplied = false;
+    let rerankDropped = 0;
+    let rerankError: string | undefined;
+    if (this.reranker && candidates.length > 0) {
+      if (options.signal?.aborted) throw new Error("检索已取消");
+      try {
+        const documents = candidates.map(item =>
+          `${item.chunk.title ?? ""}\n${item.chunk.text}`.trim());
+        const results = await this.reranker.rerank(trimmed, documents, {
+          topN: candidates.length,
+          signal: options.signal,
+        });
+        const scores = new Map(results.map(result => [result.index, result.score]));
+        const scored = candidates.flatMap((item, index): RankedChunk[] => {
+          const score = scores.get(index);
+          return score === undefined ? [] : [{ ...item, rerankScore: score }];
+        });
+        ranked = scored
+          .filter(item => (item.rerankScore ?? 0) >= minRerankScore)
+          .sort((left, right) => (right.rerankScore ?? 0) - (left.rerankScore ?? 0)
+            || left.chunk.id.localeCompare(right.chunk.id));
+        rerankDropped = candidates.length - ranked.length;
+        rerankApplied = true;
+      } catch (error) {
+        // 调用方取消是控制流，不降级为 RRF；其余失败回退，不阻断问答。
+        if (options.signal?.aborted) throw new Error("检索已取消");
+        rerankError = classifyRerankError(error);
+        ranked = candidates;
+      }
+    }
+
+    const hits: RagHit[] = [];
+    const perCard = new Map<string, number>();
+    let contextChars = 0;
+    let truncated = false;
+    for (const item of ranked) {
+      if (hits.length >= topK) break;
+      const used = perCard.get(item.chunk.cardId) ?? 0;
+      if (used >= maxChunksPerCard) continue;
+      const remaining = maxTotalChars - contextChars;
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
+      let text = item.chunk.text;
+      if (text.length > remaining) {
+        if (remaining < MIN_TRUNCATED_CHARS) {
+          truncated = true;
+          break;
+        }
+        text = text.slice(0, remaining);
+        truncated = true;
+      }
+      hits.push({
+        chunkId: item.chunk.id,
+        cardId: item.chunk.cardId,
+        courseId: item.chunk.courseId,
+        kind: item.chunk.kind,
+        title: item.chunk.title,
+        text,
+        score: item.rerankScore ?? item.score,
+        rrfScore: item.score,
+        ...(item.rerankScore === undefined ? {} : { rerankScore: item.rerankScore }),
+        denseRank: item.denseRank,
+        keywordRank: item.keywordRank,
+      });
+      contextChars += text.length;
+      perCard.set(item.chunk.cardId, used + 1);
+      if (truncated) break;
+    }
+
     return {
       hits,
       diagnostics: {
         denseCandidates: denseChunks.length,
         keywordCandidates: keywordChunks.length,
         fusedCandidates: fused.size,
+        cardCandidates,
+        rerankApplied,
+        rerankCandidates: candidates.length,
+        rerankDropped,
+        contextChars,
+        truncated,
+        ...(rerankError === undefined ? {} : { rerankError }),
       },
     };
+  }
+
+  private pickCandidates(
+    ordered: readonly FusedChunk[],
+    limit: number,
+    maxChunksPerCard: number,
+  ): FusedChunk[] {
+    const picked: FusedChunk[] = [];
+    const perCard = new Map<string, number>();
+    for (const item of ordered) {
+      if (picked.length >= limit) break;
+      const used = perCard.get(item.chunk.cardId) ?? 0;
+      if (used >= maxChunksPerCard) continue;
+      picked.push(item);
+      perCard.set(item.chunk.cardId, used + 1);
+    }
+    return picked;
   }
 }

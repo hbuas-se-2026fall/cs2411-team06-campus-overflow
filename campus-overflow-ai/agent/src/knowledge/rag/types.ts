@@ -48,15 +48,30 @@ export interface RagIndexOptions {
   hnsw?: Omit<HnswOptions, "dimensions">;
   /** RRF 常数 k，默认 60 */
   rrfK?: number;
+  /** 可选精排；未提供时保持 RRF 顺序 */
+  reranker?: RerankProvider;
+  /** 融合去重后进入精排的候选数，默认 5 */
+  candidateLimit?: number;
+  /** 精排最低分，默认 0；仅启用重排时生效 */
+  minRerankScore?: number;
+  /** 同一卡片最多保留的片段数，默认 1 */
+  maxChunksPerCard?: number;
+  /** 最终证据总字符预算，默认 2400 */
+  maxTotalChars?: number;
 }
 
 export interface RagSearchOptions {
   /** 每路召回数量，默认 20 */
   topN?: number;
-  /** 融合后返回数量，默认 5 */
+  /** 最终返回数量，默认 5 */
   topK?: number;
   courseId?: number;
   efSearch?: number;
+  candidateLimit?: number;
+  minRerankScore?: number;
+  maxChunksPerCard?: number;
+  maxTotalChars?: number;
+  signal?: AbortSignal;
 }
 
 export interface RagHit {
@@ -66,7 +81,12 @@ export interface RagHit {
   kind: "summary" | "body";
   title?: string;
   text: string;
+  /** 最终排序分：启用重排时为精排分，否则为 RRF 融合分 */
   score: number;
+  /** RRF 融合分，保留用于诊断 */
+  rrfScore: number;
+  /** 精排分，仅启用重排时有值 */
+  rerankScore?: number;
   denseRank?: number;
   keywordRank?: number;
 }
@@ -75,6 +95,19 @@ export interface RagSearchDiagnostics {
   denseCandidates: number;
   keywordCandidates: number;
   fusedCandidates: number;
+  /** 融合结果中不同卡片的数量 */
+  cardCandidates: number;
+  rerankApplied: boolean;
+  /** 送入重排的候选数 */
+  rerankCandidates: number;
+  /** 低于阈值或未被精排返回的候选数 */
+  rerankDropped: number;
+  /** 最终证据总字符数 */
+  contextChars: number;
+  /** 是否触发字符预算裁剪 */
+  truncated: boolean;
+  /** 重排失败的脱敏类型，如 timeout/http_500/invalid_response */
+  rerankError?: string;
 }
 
 export interface RagSearchResult {
