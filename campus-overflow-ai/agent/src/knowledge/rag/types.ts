@@ -91,6 +91,27 @@ export interface RagHit {
   keywordRank?: number;
 }
 
+/** 单个子问题的检索与合并贡献诊断；不包含子问题原文。 */
+export interface RagSubQueryDiagnostics {
+  /** 子问题序号，从 1 开始 */
+  index: number;
+  denseCandidates: number;
+  keywordCandidates: number;
+  fusedCandidates: number;
+  /** 该子问题召回的不同卡片数 */
+  cardCandidates: number;
+  rerankApplied: boolean;
+  rerankCandidates: number;
+  rerankDropped: number;
+  /** 合并后实际进入最终结果的卡片数 */
+  selectedCards: number;
+  /** 合并后实际进入最终结果的字符数 */
+  contextChars: number;
+  /** 该子问题的证据是否因总预算被截断或丢弃 */
+  truncated: boolean;
+  rerankError?: string;
+}
+
 export interface RagSearchDiagnostics {
   denseCandidates: number;
   keywordCandidates: number;
@@ -99,6 +120,8 @@ export interface RagSearchDiagnostics {
   cardCandidates: number;
   /** 实际检索的子问题数；单问题为 1 */
   subQueryCount: number;
+  /** 逐子问题明细，顺序与拆解顺序一致 */
+  subQueries: RagSubQueryDiagnostics[];
   rerankApplied: boolean;
   /** 送入重排的候选数 */
   rerankCandidates: number;

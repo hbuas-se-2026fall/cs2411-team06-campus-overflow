@@ -259,20 +259,24 @@ export class RagIndex {
       if (truncated) break;
     }
 
+    const base = {
+      denseCandidates: denseChunks.length,
+      keywordCandidates: keywordChunks.length,
+      fusedCandidates: fused.size,
+      cardCandidates,
+      rerankApplied,
+      rerankCandidates: candidates.length,
+      rerankDropped,
+      contextChars,
+      truncated,
+      ...(rerankError === undefined ? {} : { rerankError }),
+    };
     return {
       hits,
       diagnostics: {
-        denseCandidates: denseChunks.length,
-        keywordCandidates: keywordChunks.length,
-        fusedCandidates: fused.size,
-        cardCandidates,
+        ...base,
         subQueryCount: 1,
-        rerankApplied,
-        rerankCandidates: candidates.length,
-        rerankDropped,
-        contextChars,
-        truncated,
-        ...(rerankError === undefined ? {} : { rerankError }),
+        subQueries: [{ index: 1, selectedCards: selectedCards.size, ...base }],
       },
     };
   }
@@ -302,7 +306,7 @@ export class RagIndex {
       maxTotalChars: 1_000_000,
     })));
 
-    const groups = perQuery.map(result => {
+    const groups = perQuery.map((result, queryIndex) => {
       const cards: RagHit[][] = [];
       const indexByCard = new Map<string, number>();
       for (const hit of result.hits) {
@@ -314,24 +318,24 @@ export class RagIndex {
           cards[existing]?.push(hit);
         }
       }
-      return cards;
+      return { queryIndex, cards };
     });
 
     const maxCards = options.topK ?? 5;
-    const merged: RagHit[] = [];
+    const merged: { hit: RagHit; queryIndex: number }[] = [];
     const seenCards = new Set<string>();
     const seenChunks = new Set<string>();
     for (let rank = 0; seenCards.size < maxCards; rank += 1) {
       let added = false;
-      for (const cards of groups) {
-        const cardHits = cards[rank];
+      for (const group of groups) {
+        const cardHits = group.cards[rank];
         const cardId = cardHits?.[0]?.cardId;
         if (!cardHits || !cardId || seenCards.has(cardId)) continue;
         seenCards.add(cardId);
         for (const hit of cardHits) {
           if (seenChunks.has(hit.chunkId)) continue;
           seenChunks.add(hit.chunkId);
-          merged.push(hit);
+          merged.push({ hit, queryIndex: group.queryIndex });
         }
         added = true;
         if (seenCards.size >= maxCards) break;
@@ -339,26 +343,39 @@ export class RagIndex {
       if (!added) break;
     }
 
+    const contributions = unique.map(() => ({
+      cards: new Set<string>(),
+      contextChars: 0,
+      truncated: false,
+    }));
     const hits: RagHit[] = [];
     let contextChars = 0;
     let truncated = false;
-    for (const hit of merged) {
+    for (const entry of merged) {
+      const hit = entry.hit;
+      const contribution = contributions[entry.queryIndex];
+      if (!contribution) continue;
       const remaining = budget - contextChars;
       if (remaining <= 0) {
+        contribution.truncated = true;
         truncated = true;
         break;
       }
       let text = hit.text;
       if (text.length > remaining) {
         if (remaining < MIN_TRUNCATED_CHARS) {
+          contribution.truncated = true;
           truncated = true;
           break;
         }
         text = text.slice(0, remaining);
+        contribution.truncated = true;
         truncated = true;
       }
       hits.push({ ...hit, text });
       contextChars += text.length;
+      contribution.contextChars += text.length;
+      contribution.cards.add(hit.cardId);
       if (truncated) break;
     }
 
@@ -375,6 +392,24 @@ export class RagIndex {
         cardCandidates: new Set(perQuery.flatMap(result =>
           result.hits.map(hit => hit.cardId))).size,
         subQueryCount: unique.length,
+        subQueries: unique.map((_, index) => {
+          const detail = perQuery[index]?.diagnostics;
+          const contribution = contributions[index];
+          return {
+            index: index + 1,
+            denseCandidates: detail?.denseCandidates ?? 0,
+            keywordCandidates: detail?.keywordCandidates ?? 0,
+            fusedCandidates: detail?.fusedCandidates ?? 0,
+            cardCandidates: detail?.cardCandidates ?? 0,
+            rerankApplied: detail?.rerankApplied ?? false,
+            rerankCandidates: detail?.rerankCandidates ?? 0,
+            rerankDropped: detail?.rerankDropped ?? 0,
+            selectedCards: contribution?.cards.size ?? 0,
+            contextChars: contribution?.contextChars ?? 0,
+            truncated: contribution?.truncated ?? false,
+            ...(detail?.rerankError === undefined ? {} : { rerankError: detail.rerankError }),
+          };
+        }),
         rerankApplied: perQuery.every(result => result.diagnostics.rerankApplied),
         rerankCandidates: sum(result => result.diagnostics.rerankCandidates),
         rerankDropped: sum(result => result.diagnostics.rerankDropped),

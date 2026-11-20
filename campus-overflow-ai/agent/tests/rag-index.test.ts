@@ -85,6 +85,12 @@ describe("RAG 检索", () => {
     const result = await index.searchMany(["死锁", "ERR_QUOTA_429"], { topK: 2 });
 
     expect(result.diagnostics.subQueryCount).toBe(2);
+    expect(result.diagnostics.subQueries.map(item => item.index)).toEqual([1, 2]);
+    expect(result.diagnostics.subQueries.map(item => item.selectedCards)).toEqual([1, 1]);
+    expect(result.diagnostics.subQueries[0]?.contextChars).toBeGreaterThan(0);
+    expect(result.diagnostics.subQueries[1]?.contextChars).toBeGreaterThan(0);
+    expect(result.diagnostics.subQueries.reduce((sum, item) => sum + item.contextChars, 0))
+      .toBe(result.diagnostics.contextChars);
     expect([...new Set(result.hits.map(hit => hit.cardId))]).toEqual(["db", "api"]);
     expect(result.hits.filter(hit => hit.cardId === "db")).toHaveLength(2);
   });
@@ -102,6 +108,8 @@ describe("RAG 检索", () => {
     const result = await index.searchMany(["死锁"], { topK: 1 });
 
     expect(result.diagnostics.subQueryCount).toBe(1);
+    expect(result.diagnostics.subQueries).toHaveLength(1);
+    expect(result.diagnostics.subQueries[0]).toMatchObject({ index: 1, selectedCards: 1 });
     expect(result.hits[0]?.cardId).toBe("db");
   });
 
@@ -133,6 +141,10 @@ describe("RAG 检索", () => {
 
     expect(result.diagnostics.contextChars).toBeLessThanOrEqual(250);
     expect(result.diagnostics.truncated).toBe(true);
+    expect(result.diagnostics.subQueries).toHaveLength(2);
+    expect(result.diagnostics.subQueries.some(item => item.truncated)).toBe(true);
+    expect(result.diagnostics.subQueries.reduce((sum, item) => sum + item.contextChars, 0))
+      .toBe(result.diagnostics.contextChars);
   });
 
   it("精确错误码优先命中", async () => {
