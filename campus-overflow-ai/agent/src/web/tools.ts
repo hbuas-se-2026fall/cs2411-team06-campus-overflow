@@ -12,7 +12,7 @@ import { searchTavily, type WebSource } from "./search.js";
 interface Options {
   config?: WebConfig;
   search?: (query: string, signal?: AbortSignal) => Promise<WebSource[]>;
-  read?: (url: string, signal?: AbortSignal) => Promise<WebPage>;
+  read?: (url: string, signal?: AbortSignal, traceId?: string) => Promise<WebPage>;
 }
 const Query = z.object({ query: z.string().trim().min(1).max(300) }).strict();
 const Page = z.object({ url: z.string().min(1).max(2048) }).strict();
@@ -52,7 +52,7 @@ export const createWebTools = (principal: AgentPrincipal, options: Options = {})
       const url = parsePublicUrl(Page.parse(raw).url).href;
       const source = sources.get(url);
       if (!source) throw new SecurityPolicyError("web_source_not_observed");
-      const page = await (options.read ?? readWithBrowser)(url, context.signal);
+      const page = await (options.read ?? readWithBrowser)(url, context.signal, context.traceId);
       checkSignal(context.signal);
       return { kind: "external_web", title: source.title, url: parsePublicUrl(page.url).href,
         content: redactSensitive(page.content).slice(0, 12_000) };

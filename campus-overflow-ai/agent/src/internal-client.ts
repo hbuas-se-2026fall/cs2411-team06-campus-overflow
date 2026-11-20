@@ -15,6 +15,7 @@ import {
   type GovernanceRequestAck, type GovernanceRequestInput, type GovernanceState,
 } from "./approvals/types.js";
 import { createAuditClient, type AuditClient } from "./observability/audit-client.js";
+import type { SandboxAuditEvent } from "./sandbox/contracts.js";
 import { checkSignal, withUpstreamDeadline } from "./loop/abort.js";
 import type { TraceId } from "./types/index.js";
 
@@ -353,6 +354,24 @@ export interface UserInternalClient extends InternalClient {
   verifyCertifiedAnswer(answerId: number, traceId: TraceId): Promise<{ certified: boolean; visible: boolean; course_id: number; question_id: number; answer_id: number; url: string }>;
   proposeClassChange(body: ClassChangeInput, traceId: TraceId): Promise<ClassChangeResult>;
   readClassChange(requestId: string, traceId: TraceId): Promise<ClassChangeResult>;
+  /** P0-3 聊天可恢复流：幂等登记、按序追加、续接读取与取消。 */
+  ensureChatStream(
+    requestId: string,
+    body: { agent_run_id?: string; trace_id?: string },
+    traceId: TraceId,
+  ): Promise<ChatStreamSnapshot>;
+  appendChatStreamEvent(
+    requestId: string,
+    body: { seq: number; event_type: ChatEventType; data: string },
+    traceId: TraceId,
+  ): Promise<ChatStreamEventAck>;
+  readChatStream(requestId: string, after: number, traceId: TraceId): Promise<ChatStreamRead>;
+  cancelChatStream(requestId: string, traceId: TraceId): Promise<ChatStreamSnapshot>;
+}
+
+/** P0-4 沙箱审计只走服务凭证：系统级事件不携带用户身份。 */
+export interface SandboxAuditRecorder {
+  recordSandboxEvent(event: SandboxAuditEvent, traceId: TraceId): Promise<{ id: number }>;
 }
 
 const buildUrl = (baseUrl: string, path: string, query: Record<string, string | undefined>): string => {
@@ -527,6 +546,44 @@ const InjectedPatrolNotesSchema = z.object({
   max_chars: z.number().int(),
 });
 
+// ---------- 聊天可恢复流（P0-3） ----------
+
+export const CHAT_EVENT_TYPES = ["meta", "delta", "notice", "done", "error"] as const;
+export type ChatEventType = (typeof CHAT_EVENT_TYPES)[number];
+
+export const ChatStreamSnapshotSchema = z.object({
+  request_id: z.string(),
+  status: z.enum(["running", "succeeded", "failed", "cancelled"]),
+  cancel_requested: z.boolean(),
+  agent_run_id: z.string().nullable(),
+  trace_id: z.string().nullable(),
+  expires_at: z.string(),
+  created: z.boolean(),
+});
+export type ChatStreamSnapshot = z.infer<typeof ChatStreamSnapshotSchema>;
+
+export const ChatStreamEventItemSchema = z.object({
+  seq: z.number().int().positive(),
+  event_type: z.string(),
+  data: z.string(),
+});
+export type ChatStreamEventItem = z.infer<typeof ChatStreamEventItemSchema>;
+
+export const ChatStreamReadSchema = ChatStreamSnapshotSchema.extend({
+  events: z.array(ChatStreamEventItemSchema),
+});
+export type ChatStreamRead = z.infer<typeof ChatStreamReadSchema>;
+
+export const ChatStreamEventAckSchema = z.object({
+  seq: z.number().int().positive(),
+  status: z.string(),
+  duplicate: z.boolean(),
+});
+export type ChatStreamEventAck = z.infer<typeof ChatStreamEventAckSchema>;
+
+/** 沙箱审计回执：只关心是否落库，不信任后端回显的其余字段。 */
+const SandboxEventAckSchema = z.object({ id: z.number().int().positive() });
+
 const createRequest = (config: InternalClientConfig) => {
   return async <T>(
     path: string,
@@ -566,7 +623,9 @@ const createRequest = (config: InternalClientConfig) => {
   };
 };
 
-export const createInternalClient = (config: InternalClientConfig): UserInternalClient => {
+export const createInternalClient = (
+  config: InternalClientConfig,
+): UserInternalClient & SandboxAuditRecorder => {
   // 即使传空凭证也不退回服务检索，由后端拒绝无效用户身份。
   const prefix = config.authorization === undefined ? "/internal/agent" : "/internal/agent/user";
   const request = createRequest(config);
@@ -921,9 +980,64 @@ export const createInternalClient = (config: InternalClientConfig): UserInternal
         },
         traceId, InjectedPatrolNotesSchema,
       ),
+    ensureChatStream: async (requestId, body, traceId) => {
+      const id = chatRequestId(requestId);
+      const data = await request(
+        `/internal/agent/user/chat-streams/${id}`, {}, traceId, ChatStreamSnapshotSchema,
+        { method: "PUT", body: {
+          ...(body.agent_run_id === undefined ? {} : { agent_run_id: body.agent_run_id }),
+          ...(body.trace_id === undefined ? {} : { trace_id: body.trace_id }),
+        } },
+      );
+      if (data.request_id !== id) throw new InternalApiError(502, 502, "聊天流标识不一致");
+      return data;
+    },
+    appendChatStreamEvent: async (requestId, body, traceId) => {
+      const id = chatRequestId(requestId);
+      const data = await request(
+        `/internal/agent/user/chat-streams/${id}/events`, {}, traceId, ChatStreamEventAckSchema,
+        { method: "POST", body },
+      );
+      if (data.seq !== body.seq) throw new InternalApiError(502, 502, "聊天事件序号不一致");
+      return data;
+    },
+    readChatStream: async (requestId, after, traceId) => {
+      const id = chatRequestId(requestId);
+      if (!Number.isInteger(after) || after < 0) throw new InternalApiError(400, 400, "事件游标不合法");
+      const data = await request(
+        `/internal/agent/user/chat-streams/${id}`,
+        after > 0 ? { after: String(after) } : {},
+        traceId, ChatStreamReadSchema,
+      );
+      if (data.request_id !== id) throw new InternalApiError(502, 502, "聊天流标识不一致");
+      let cursor = after;
+      for (const event of data.events) {
+        if (event.seq <= cursor) throw new InternalApiError(502, 502, "聊天事件游标回退");
+        cursor = event.seq;
+      }
+      return data;
+    },
+    cancelChatStream: async (requestId, traceId) => {
+      const id = chatRequestId(requestId);
+      const data = await request(
+        `/internal/agent/user/chat-streams/${id}/cancel`, {}, traceId, ChatStreamSnapshotSchema,
+        { method: "POST", body: {} },
+      );
+      if (data.request_id !== id) throw new InternalApiError(502, 502, "聊天流标识不一致");
+      return data;
+    },
+    recordSandboxEvent: (event, traceId) => request(
+      "/internal/agent/sandbox/events", {}, traceId, SandboxEventAckSchema,
+      { method: "POST", body: event },
+    ),
   };
 };
 
+/** 聊天流请求 id 统一为小写 UUID，与后端存储键一致。 */
+const chatRequestId = (value: string): string => z.uuid().parse(value).toLowerCase();
+
 /** 默认实例：读环境变量；测试经 createInternalClient 注入 mock fetch */
-export const defaultInternalClient = (authorization: string, signal?: AbortSignal): UserInternalClient =>
+export const defaultInternalClient = (
+  authorization: string, signal?: AbortSignal,
+): UserInternalClient & SandboxAuditRecorder =>
   createInternalClient({ ...resolveInternalConfig(), authorization, signal, fetchImpl: fetch });

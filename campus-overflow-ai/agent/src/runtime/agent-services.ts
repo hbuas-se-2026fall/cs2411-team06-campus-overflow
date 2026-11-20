@@ -1,5 +1,6 @@
 import { createInternalClient, resolveInternalConfig } from "../internal-client.js";
 import { randomUUID } from "node:crypto";
+import { createSlotLeaseClient } from "../backend-lease.js";
 import { createGovernanceWorkerClient } from "../governance-worker-client.js";
 import { getKnowledgeCatalog } from "../knowledge/runtime.js";
 import { startGovernanceExecutor } from "../scheduler/governance-executor.js";
@@ -25,6 +26,21 @@ export const createAgentBackgroundServices = () => createBackgroundServices([
   () => startModerationPatrolScheduler({ createClient: () => createInternalClient({ ...resolveInternalConfig(), fetchImpl: fetch }) }),
   () => startNightlyConsolidationScheduler({
     createClient: () => createInternalClient({ ...resolveInternalConfig(), fetchImpl: fetch }),
+    // P0-1：夜间整理跨实例互斥，默认容量 1；后端不可用时本次跳过，避免重复执行
+    acquireLease: async () => {
+      const leases = createSlotLeaseClient(resolveInternalConfig(), fetch);
+      const configured = Number(process.env.AGENT_GLOBAL_MAINTENANCE_LIMIT ?? "1");
+      const capacity = Number.isInteger(configured) && configured > 0 ? configured : 1;
+      const lease = await leases.claim({
+        kind: "maintenance",
+        capacity,
+        jobId: `nightly:${new Date().toISOString().slice(0, 10)}`,
+        instanceId: process.env.AGENT_INSTANCE_ID?.trim() || "agent-nightly",
+        ttlSeconds: 900,
+      });
+      if (!lease) return null;
+      return { release: () => leases.release(lease) };
+    },
     getCatalog: getKnowledgeCatalog,
     syncQaSnapshot: async () => {
       const client = createInternalClient({ ...resolveInternalConfig(), fetchImpl: fetch });

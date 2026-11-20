@@ -4,6 +4,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { createApp } from "../src/app";
 import { InternalApiError, type UserInternalClient } from "../src/internal-client";
 import { auditStub } from "./helpers/audit-stub";
+import { chatStreamStub } from "./helpers/chat-stream-stub";
 import { approvedReview } from "./helpers/review-response";
 
 const usage = {
@@ -29,7 +30,7 @@ function fixture(first: unknown, output: unknown = tagOutput) {
     { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage },
   ] }) }));
   const model = new MockLanguageModelV4({ doGenerate: generate, doStream: stream });
-  const client: UserInternalClient = {
+  const client: UserInternalClient = chatStreamStub().apply({
     audit: auditStub(),
     resolvePrincipal: vi.fn().mockResolvedValue(Object.freeze({ user_id: 3, role: "student", status: "active",
       identity_type: "undergraduate", assistant_cert_status: "none" })),
@@ -38,7 +39,7 @@ function fixture(first: unknown, output: unknown = tagOutput) {
     fetchTags: vi.fn().mockResolvedValue([{ id: 5, name: "并发", type: "tech" }]),
     fetchModerationTarget: vi.fn().mockResolvedValue({ targetType: "answer", targetId: 12,
       authorId: 1, courseId: 2, body: "后端原文" }),
-  };
+  });
   const app = createApp({ getModel: () => model, createClient: () => client });
   const request = (path: string, body: unknown) => app.request(path, {
     method: "POST", headers: { authorization: "Bearer user" }, body: JSON.stringify(body),

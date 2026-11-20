@@ -5,7 +5,10 @@ import { SSEStreamingApi } from "hono/streaming";
 import { createApp } from "../src/app";
 import { createInternalClient } from "../src/internal-client";
 import { auditFetch } from "./helpers/audit-fetch";
+import { chatStreamStub } from "./helpers/chat-stream-stub";
 import { approvedReview } from "./helpers/review-response";
+
+const CHAT_REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 
 const usage = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 0, text: 0, reasoning: 0 } };
@@ -59,20 +62,25 @@ function fixture() {
   });
   const model = new MockLanguageModelV4({ doGenerate: generate, doStream: stream });
   let clientSignal!: AbortSignal;
+  const chatStreams = chatStreamStub();
   const app = createApp({ getModel: () => model, createClient: (authorization, signal) => {
     clientSignal = signal;
-    return createInternalClient({ baseUrl: "http://backend.test", token: "service-secret",
-      authorization, signal, fetchImpl });
+    return chatStreams.apply(createInternalClient({ baseUrl: "http://backend.test", token: "service-secret",
+      authorization, signal, fetchImpl }));
   } });
   const request = (chat = false) => app.request(chat ? "/agent/chat" : "/agent/tasks/suggest_tags", {
     method: "POST", headers: { authorization: "Bearer user-secret", "x-trace-id": "trace-stop" },
     signal: controller.signal,
-    body: JSON.stringify(chat ? { message: "课程问题" } : { questionTitle: "并发", questionBody: "线程问题" }),
+    body: JSON.stringify(chat ? { message: "课程问题", request_id: CHAT_REQUEST_ID }
+      : { questionTitle: "并发", questionBody: "线程问题" }),
+  });
+  const cancel = () => app.request(`/agent/chat/runs/${CHAT_REQUEST_ID}/cancel`, {
+    method: "POST", headers: { authorization: "Bearer user-secret", "x-trace-id": "trace-stop" },
   });
   const patches = () => fetchImpl.mock.calls.filter((call) => call[1]?.method === "PATCH");
   const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
-  return { controller, read, generate, stream, modelSignals, streamSignals, beforeStep, finish,
-    request, patches, errorLog, get clientSignal() { return clientSignal; } };
+  return { app, controller, read, generate, stream, modelSignals, streamSignals, beforeStep, finish,
+    request, cancel, patches, errorLog, get clientSignal() { return clientSignal; } };
 }
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -221,7 +229,7 @@ describe("运行超时与取消", () => {
     expect(JSON.parse(String(f.patches()[0][1]?.body))).toMatchObject({ status: "failed", error_summary: "任务运行超时" });
   });
 
-  it("聊天已输出片段后取消，不发送 done 并停止流式模型", async () => {
+  it("聊天运行中显式取消后不发送 done 并停止流式模型", async () => {
     const f = fixture();
     const response = await f.request(true);
     const text = response.text();
@@ -231,7 +239,7 @@ describe("运行超时与取消", () => {
       await vi.advanceTimersByTimeAsync(1);
     }
     expect(f.stream).toHaveBeenCalledOnce();
-    f.controller.abort();
+    expect((await f.cancel()).status).toBe(200);
     await flush();
     expect(f.streamSignals[0]?.aborted).toBe(true);
     const body = await text;
@@ -241,7 +249,7 @@ describe("运行超时与取消", () => {
     expect(JSON.parse(String(f.patches()[0][1]?.body)).status).toBe("failed");
   });
 
-  it("SSE 读端取消也传播到请求级控制器", async () => {
+  it("SSE 读端断开不取消运行，取消必须显式请求", async () => {
     const f = fixture();
     const response = await f.request(true);
     const reader = response.body!.getReader();
@@ -250,8 +258,11 @@ describe("运行超时与取消", () => {
     await reader.cancel();
     await flush();
     expect(f.controller.signal.aborted).toBe(false);
-    expect(f.clientSignal.aborted).toBe(true);
-    expect(f.patches()).toHaveLength(1);
+    expect(f.streamSignals[0]?.aborted).toBe(false);
+    expect(f.patches()).toHaveLength(0);
+    expect((await f.cancel()).status).toBe(200);
+    await flush();
+    expect(f.streamSignals[0]?.aborted).toBe(true);
     expect(JSON.parse(String(f.patches()[0][1]?.body)).status).toBe("failed");
   });
 

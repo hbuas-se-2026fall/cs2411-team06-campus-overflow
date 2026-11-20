@@ -5,6 +5,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { createApp } from "../src/app";
 import type { UserInternalClient } from "../src/internal-client";
 import { auditStub } from "./helpers/audit-stub";
+import { chatStreamStub } from "./helpers/chat-stream-stub";
 import { approvedReview } from "./helpers/review-response";
 
 const zeroUsage = {
@@ -12,7 +13,7 @@ const zeroUsage = {
   outputTokens: { total: 0, text: 0, reasoning: 0 },
 };
 
-const createClient = (): UserInternalClient => ({
+const createClient = (): UserInternalClient => chatStreamStub().apply({
   audit: auditStub(1),
   resolvePrincipal: async () => Object.freeze({
     user_id: 1, role: "student", status: "active",
