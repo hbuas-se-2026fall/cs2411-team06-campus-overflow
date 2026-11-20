@@ -15,13 +15,16 @@ vi.mock("@/shared/stores/session-store", () => ({
 
 import { AgentChatError, sendAgentChat } from "./agent-chat";
 
-const sse = (events: Array<[string, unknown]>): Response => new Response(
+const sse = (events: Array<[string, unknown]>, ids?: number[]): Response => new Response(
   new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
-      for (const [event, data] of events) {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-      }
+      events.forEach(([event, data], index) => {
+        const id = ids?.[index];
+        controller.enqueue(encoder.encode(
+          `event: ${event}\ndata: ${JSON.stringify(data)}\n${id === undefined ? "" : `id: ${id}\n`}\n`,
+        ));
+      });
       controller.close();
     },
   }),
@@ -74,9 +77,10 @@ describe("sendAgentChat 记忆注入（T-14 接线点）", () => {
     });
 
     const result = await sendAgentChat("帮我复习死锁");
-    expect(requestBody()).toEqual({
+    expect(requestBody()).toMatchObject({
       message: "帮我复习死锁",
       browser_memory: ["备考操作系统", "偏好简洁回答"], // 最新在前
+      request_id: expect.any(String),
     });
     expect(result.finishReason).toBe("stop");
     expect(mocks.fetch.mock.calls.map(call => JSON.parse(call[1].body).stage)).toEqual(["index", "summary", "detail", undefined]);
@@ -124,11 +128,13 @@ describe("sendAgentChat 记忆注入（T-14 接线点）", () => {
     // 每次调用生成新 Response：同一 ReadableStream 只能被读取（锁定）一次
     mocks.fetch.mockImplementation(async () => sse([["done", { finishReason: "stop" }]]));
     await sendAgentChat("问题一");
-    expect(requestBody()).toEqual({ message: "问题一" });
+    expect(requestBody()).toMatchObject({ message: "问题一" });
+    expect(requestBody()).not.toHaveProperty("browser_memory");
 
     mocks.me = null;
     await sendAgentChat("问题二");
-    expect(requestBody()).toEqual({ message: "问题二" });
+    expect(requestBody()).toMatchObject({ message: "问题二" });
+    expect(requestBody()).not.toHaveProperty("browser_memory");
   });
 });
 
@@ -169,8 +175,46 @@ describe("sendAgentChat SSE 流解析", () => {
     await expect(sendAgentChat("q")).rejects.toThrow("AI 服务暂不可用，请稍后重试");
   });
 
-  it("流意外结束（无 done）抛回复中断", async () => {
-    mocks.fetch.mockResolvedValue(sse([["delta", { text: "半截" }]]));
-    await expect(sendAgentChat("q")).rejects.toThrow("回复中断");
+  it("连接中断且未收到 done 时按事件游标自动续接", async () => {
+    mocks.fetch.mockImplementation(async (url) => {
+      if (String(url).includes("/runs/")) {
+        return sse([["delta", { text: "续接内容" }], ["done", { finishReason: "stop" }]], [2, 3]);
+      }
+      return sse([["meta", { agentRunId: "r", traceId: "t", ai: true }], ["delta", { text: "半截" }]], [1, 2]);
+    });
+    const received: string[] = [];
+    const result = await sendAgentChat("q", { onDelta: (text) => received.push(text) });
+    expect(received).toEqual(["半截", "续接内容"]);
+    expect(result.finishReason).toBe("stop");
+    expect(String(mocks.fetch.mock.calls[1]?.[0])).toContain("after=2");
+    expect(String(mocks.fetch.mock.calls[1]?.[0])).toContain("/runs/");
+  });
+
+  it("无法续接（回复已过期）时抛中文错误且不重复展示已收内容", async () => {
+    mocks.fetch.mockImplementation(async (url) => {
+      if (String(url).includes("/runs/")) {
+        return new Response(JSON.stringify({ code: 404, data: null, message: "该回复已过期或不存在，请重新提问" }),
+          { status: 404, headers: { "content-type": "application/json" } });
+      }
+      return sse([["delta", { text: "半截" }]], [1]);
+    });
+    await expect(sendAgentChat("q")).rejects.toThrow("该回复已过期或不存在");
+  });
+
+  it("用户中止不续接，并异步通知服务端取消运行", async () => {
+    const controller = new AbortController();
+    mocks.fetch.mockImplementation(async (url) => {
+      if (String(url).endsWith("/cancel")) return Response.json({ code: 200, data: null, message: "ok" });
+      return new Response(new ReadableStream({ start() { /* 保持连接直到用户中止 */ } }),
+        { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const pending = sendAgentChat("q", {}, { signal: controller.signal });
+    await vi.waitFor(() => { expect(mocks.fetch).toHaveBeenCalled(); });
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    await vi.waitFor(() => {
+      expect(mocks.fetch.mock.calls.some((call) => String(call[0]).endsWith("/cancel"))).toBe(true);
+    });
+    expect(mocks.fetch.mock.calls.some((call) => String(call[0]).includes("/stream"))).toBe(false);
   });
 });
