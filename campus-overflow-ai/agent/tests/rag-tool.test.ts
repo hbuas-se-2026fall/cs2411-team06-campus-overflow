@@ -95,6 +95,29 @@ describe("searchKnowledge 工具", () => {
     errorSpy.mockRestore();
   });
 
+  it("复合问题拆成多个子问题检索（D-009）", async () => {
+    const localChunks: RagChunk[] = [
+      {
+        id: "db#deadlock", cardId: "db", courseId: 1, kind: "body", title: "数据库",
+        text: "死锁检测与预防",
+      },
+      {
+        id: "api#quota", cardId: "api", courseId: 1, kind: "body", title: "接口",
+        text: "配额超限错误码 ERR_QUOTA_429",
+      },
+    ];
+    const index = await RagIndex.build({
+      chunks: localChunks,
+      embedder: createHashEmbeddingProvider({ dimensions: 64 }),
+    });
+    const tool = createSearchKnowledgeTool(async () => index, 1);
+    const result = await tool.execute!({ query: "死锁？配额？", limit: 2 }, context) as {
+      hits: { card_id: string }[];
+    };
+
+    expect(new Set(result.hits.map(hit => hit.card_id))).toEqual(new Set(["db", "api"]));
+  });
+
   it("重排失败时仍返回 RRF 结果并记录降级诊断", async () => {
     const index = await RagIndex.build({
       chunks,

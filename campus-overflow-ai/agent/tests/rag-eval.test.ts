@@ -17,6 +17,7 @@ const stubIndex = (results: Record<string, string[]>): RagIndex => ({
       keywordCandidates: 0,
       fusedCandidates: 0,
       cardCandidates: 0,
+      subQueryCount: 1,
       rerankApplied: false,
       rerankCandidates: 0,
       rerankDropped: 0,

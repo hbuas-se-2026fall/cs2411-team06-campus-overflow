@@ -49,7 +49,7 @@ export const createSearchKnowledgeTool = (
     }
     if (!index) return { configured: false, hits: [] };
     try {
-      const result = await index.search(parsed.query, {
+      const result = await index.searchMany([parsed.query], {
         topK: parsed.limit,
         topN: 20,
         courseId,

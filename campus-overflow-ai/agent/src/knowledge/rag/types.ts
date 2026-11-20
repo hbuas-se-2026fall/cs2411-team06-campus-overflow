@@ -97,6 +97,8 @@ export interface RagSearchDiagnostics {
   fusedCandidates: number;
   /** 融合结果中不同卡片的数量 */
   cardCandidates: number;
+  /** 实际检索的子问题数；单问题为 1 */
+  subQueryCount: number;
   rerankApplied: boolean;
   /** 送入重排的候选数 */
   rerankCandidates: number;

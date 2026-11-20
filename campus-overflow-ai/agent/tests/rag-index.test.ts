@@ -80,6 +80,61 @@ describe("RAG 检索", () => {
     expect(result.hits.map(hit => hit.chunkId)).toEqual(["signal#summary", "signal#body-0"]);
   });
 
+  it("多子问题分别检索后按卡片轮转合并", async () => {
+    const index = await buildIndex();
+    const result = await index.searchMany(["死锁", "ERR_QUOTA_429"], { topK: 2 });
+
+    expect(result.diagnostics.subQueryCount).toBe(2);
+    expect([...new Set(result.hits.map(hit => hit.cardId))]).toEqual(["db", "api"]);
+    expect(result.hits.filter(hit => hit.cardId === "db")).toHaveLength(2);
+  });
+
+  it("跨子问题重复卡片与片段只保留一次", async () => {
+    const index = await buildIndex();
+    const result = await index.searchMany(["死锁", "死锁 事务"], { topK: 3 });
+
+    expect(result.hits.filter(hit => hit.cardId === "db")).toHaveLength(2);
+    expect(new Set(result.hits.map(hit => hit.chunkId)).size).toBe(result.hits.length);
+  });
+
+  it("单问题委托单查询检索", async () => {
+    const index = await buildIndex();
+    const result = await index.searchMany(["死锁"], { topK: 1 });
+
+    expect(result.diagnostics.subQueryCount).toBe(1);
+    expect(result.hits[0]?.cardId).toBe("db");
+  });
+
+  it("多子问题共享总字符预算", async () => {
+    const longChunks: RagChunk[] = [
+      {
+        id: "a#summary", cardId: "a", courseId: 1, kind: "summary", title: "A",
+        text: "A".repeat(100),
+      },
+      {
+        id: "a#body-0", cardId: "a", courseId: 1, kind: "body", title: "A",
+        text: "A".repeat(300),
+      },
+      {
+        id: "b#summary", cardId: "b", courseId: 1, kind: "summary", title: "B",
+        text: "B".repeat(100),
+      },
+      {
+        id: "b#body-0", cardId: "b", courseId: 1, kind: "body", title: "B",
+        text: "B".repeat(300),
+      },
+    ];
+    const index = await RagIndex.build({
+      chunks: longChunks,
+      embedder: createHashEmbeddingProvider({ dimensions: 64 }),
+    });
+
+    const result = await index.searchMany(["A", "B"], { topK: 2, maxTotalChars: 250 });
+
+    expect(result.diagnostics.contextChars).toBeLessThanOrEqual(250);
+    expect(result.diagnostics.truncated).toBe(true);
+  });
+
   it("精确错误码优先命中", async () => {
     const index = await buildIndex();
     const result = await index.search("ERR_QUOTA_429", { topK: 1 });

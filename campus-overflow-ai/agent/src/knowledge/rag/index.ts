@@ -2,6 +2,7 @@
 
 import { Bm25Index } from "./bm25.js";
 import { HnswIndex } from "./hnsw.js";
+import { decomposeQuery, MAX_SUB_QUERIES } from "./query.js";
 import { tokenize } from "./tokenize.js";
 import type {
   EmbeddingProvider,
@@ -265,12 +266,121 @@ export class RagIndex {
         keywordCandidates: keywordChunks.length,
         fusedCandidates: fused.size,
         cardCandidates,
+        subQueryCount: 1,
         rerankApplied,
         rerankCandidates: candidates.length,
         rerankDropped,
         contextChars,
         truncated,
         ...(rerankError === undefined ? {} : { rerankError }),
+      },
+    };
+  }
+
+  /**
+   * 多子问题检索（D-009）：每个子问题独立走召回、RRF、精排与阈值，
+   * 再按卡片轮转合并、跨子问题去重，最后统一裁剪总预算。
+   */
+  async searchMany(
+    queries: readonly string[],
+    options: RagSearchOptions = {},
+  ): Promise<RagSearchResult> {
+    const unique = [...new Set(queries.flatMap(query => decomposeQuery(query)))]
+      .slice(0, MAX_SUB_QUERIES);
+    if (unique.length === 0) throw new Error("RAG 查询不能为空");
+    if (unique.length === 1) {
+      const result = await this.search(unique[0] ?? "", options);
+      return { hits: result.hits, diagnostics: { ...result.diagnostics, subQueryCount: 1 } };
+    }
+
+    const perQueryTopK = Math.min(3, options.topK ?? 5);
+    const budget = options.maxTotalChars ?? this.maxTotalChars;
+    const perQuery = await Promise.all(unique.map(query => this.search(query, {
+      ...options,
+      topK: perQueryTopK,
+      // 子问题内部先不裁预算，合并后统一裁剪，避免先跑的子问题挤占后面的证据。
+      maxTotalChars: 1_000_000,
+    })));
+
+    const groups = perQuery.map(result => {
+      const cards: RagHit[][] = [];
+      const indexByCard = new Map<string, number>();
+      for (const hit of result.hits) {
+        const existing = indexByCard.get(hit.cardId);
+        if (existing === undefined) {
+          indexByCard.set(hit.cardId, cards.length);
+          cards.push([hit]);
+        } else {
+          cards[existing]?.push(hit);
+        }
+      }
+      return cards;
+    });
+
+    const maxCards = options.topK ?? 5;
+    const merged: RagHit[] = [];
+    const seenCards = new Set<string>();
+    const seenChunks = new Set<string>();
+    for (let rank = 0; seenCards.size < maxCards; rank += 1) {
+      let added = false;
+      for (const cards of groups) {
+        const cardHits = cards[rank];
+        const cardId = cardHits?.[0]?.cardId;
+        if (!cardHits || !cardId || seenCards.has(cardId)) continue;
+        seenCards.add(cardId);
+        for (const hit of cardHits) {
+          if (seenChunks.has(hit.chunkId)) continue;
+          seenChunks.add(hit.chunkId);
+          merged.push(hit);
+        }
+        added = true;
+        if (seenCards.size >= maxCards) break;
+      }
+      if (!added) break;
+    }
+
+    const hits: RagHit[] = [];
+    let contextChars = 0;
+    let truncated = false;
+    for (const hit of merged) {
+      const remaining = budget - contextChars;
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
+      let text = hit.text;
+      if (text.length > remaining) {
+        if (remaining < MIN_TRUNCATED_CHARS) {
+          truncated = true;
+          break;
+        }
+        text = text.slice(0, remaining);
+        truncated = true;
+      }
+      hits.push({ ...hit, text });
+      contextChars += text.length;
+      if (truncated) break;
+    }
+
+    const firstError = perQuery.find(result => result.diagnostics.rerankError)
+      ?.diagnostics.rerankError;
+    const sum = (pick: (result: RagSearchResult) => number): number =>
+      perQuery.reduce((total, result) => total + pick(result), 0);
+    return {
+      hits,
+      diagnostics: {
+        denseCandidates: sum(result => result.diagnostics.denseCandidates),
+        keywordCandidates: sum(result => result.diagnostics.keywordCandidates),
+        fusedCandidates: sum(result => result.diagnostics.fusedCandidates),
+        cardCandidates: new Set(perQuery.flatMap(result =>
+          result.hits.map(hit => hit.cardId))).size,
+        subQueryCount: unique.length,
+        rerankApplied: perQuery.every(result => result.diagnostics.rerankApplied),
+        rerankCandidates: sum(result => result.diagnostics.rerankCandidates),
+        rerankDropped: sum(result => result.diagnostics.rerankDropped),
+        contextChars,
+        truncated,
+        ...(firstError === undefined ? {} : { rerankError: firstError }),
       },
     };
   }
