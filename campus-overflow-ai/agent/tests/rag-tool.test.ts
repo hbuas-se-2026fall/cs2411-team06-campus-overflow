@@ -8,6 +8,10 @@ import type { ToolExecutionContext } from "../src/tools/registry.js";
 import { createSearchKnowledgeTool } from "../src/tools/search-knowledge.js";
 
 const chunks: RagChunk[] = [
+  {
+    id: "db#summary", cardId: "db", courseId: 1, kind: "summary", title: "数据库",
+    text: "事务与并发控制摘要",
+  },
   { id: "db#deadlock", cardId: "db", courseId: 1, kind: "body", title: "数据库", text: "死锁检测与预防" },
   { id: "os#schedule", cardId: "os", courseId: 2, kind: "body", title: "操作系统", text: "进程调度时间片轮转" },
 ];
@@ -28,9 +32,20 @@ describe("searchKnowledge 工具", () => {
       hits: { chunk_id: string; card_id: string; kind: string; text: string }[];
     };
     expect(result.configured).toBe(true);
-    expect(result.hits[0]?.chunk_id).toBe("db#deadlock");
+    expect(result.hits[0]?.kind).toBe("summary");
     expect(result.hits[0]?.card_id).toBe("db");
-    expect(result.hits.every(hit => hit.chunk_id.startsWith("db#"))).toBe(true);
+    expect(result.hits.some(hit => hit.chunk_id === "db#deadlock")).toBe(true);
+    expect(result.hits.every(hit => hit.card_id === "db")).toBe(true);
+  });
+
+  it("limit 表示卡片数，每张卡片返回摘要与正文（D-022）", async () => {
+    const index = await buildIndex();
+    const tool = createSearchKnowledgeTool(async () => index, 1);
+    const result = await tool.execute!({ query: "死锁", limit: 1 }, context) as {
+      hits: { chunk_id: string; kind: string }[];
+    };
+
+    expect(result.hits.map(hit => hit.chunk_id)).toEqual(["db#summary", "db#deadlock"]);
   });
 
   it("拒绝模型传入 courseId 或其他额外字段", async () => {

@@ -7,7 +7,7 @@ import type { AgentTool, ToolExecutionContext } from "./registry.js";
 
 const SearchKnowledgeInputSchema = z.object({
   query: z.string().min(1).max(200).describe("要检索的课程问题或关键词"),
-  limit: z.number().int().min(1).max(5).default(3).describe("返回片段数上限"),
+  limit: z.number().int().min(1).max(5).default(3).describe("返回卡片数上限，每张卡片最多含摘要与正文两条"),
 }).strict();
 
 export interface SearchKnowledgeOutput {

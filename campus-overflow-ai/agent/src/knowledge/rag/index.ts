@@ -54,6 +54,7 @@ export class RagIndex {
   private constructor(
     private readonly chunks: readonly RagChunk[],
     private readonly byId: ReadonlyMap<string, RagChunk>,
+    private readonly byCard: ReadonlyMap<string, readonly RagChunk[]>,
     private readonly embedder: EmbeddingProvider,
     private readonly hnsw: HnswIndex,
     private readonly bm25: Bm25Index,
@@ -95,9 +96,16 @@ export class RagIndex {
     const maxChunksPerCard = assertRange(options.maxChunksPerCard ?? 1, "maxChunksPerCard", 1, 10);
     const maxTotalChars = assertRange(options.maxTotalChars ?? 2400, "maxTotalChars", 1, 1_000_000);
     const minRerankScore = assertFinite(options.minRerankScore ?? 0, "minRerankScore");
+    const byCard = new Map<string, RagChunk[]>();
+    for (const chunk of options.chunks) {
+      const cardChunks = byCard.get(chunk.cardId) ?? [];
+      cardChunks.push(chunk);
+      byCard.set(chunk.cardId, cardChunks);
+    }
     return new RagIndex(
       options.chunks,
       new Map(options.chunks.map(chunk => [chunk.id, chunk])),
+      byCard,
       options.embedder,
       hnsw,
       bm25,
@@ -205,42 +213,48 @@ export class RagIndex {
     }
 
     const hits: RagHit[] = [];
-    const perCard = new Map<string, number>();
+    const selectedCards = new Set<string>();
     let contextChars = 0;
     let truncated = false;
     for (const item of ranked) {
-      if (hits.length >= topK) break;
-      const used = perCard.get(item.chunk.cardId) ?? 0;
-      if (used >= maxChunksPerCard) continue;
-      const remaining = maxTotalChars - contextChars;
-      if (remaining <= 0) {
-        truncated = true;
-        break;
-      }
-      let text = item.chunk.text;
-      if (text.length > remaining) {
-        if (remaining < MIN_TRUNCATED_CHARS) {
+      if (selectedCards.size >= topK) break;
+      if (selectedCards.has(item.chunk.cardId)) continue;
+      const evidence = this.cardEvidence(item, fused);
+      for (const chunk of evidence) {
+        const remaining = maxTotalChars - contextChars;
+        if (remaining <= 0) {
           truncated = true;
           break;
         }
-        text = text.slice(0, remaining);
-        truncated = true;
+        let text = chunk.text;
+        if (text.length > remaining) {
+          if (remaining < MIN_TRUNCATED_CHARS) {
+            truncated = true;
+            break;
+          }
+          text = text.slice(0, remaining);
+          truncated = true;
+        }
+        const fusedItem = fused.get(chunk.id);
+        hits.push({
+          chunkId: chunk.id,
+          cardId: chunk.cardId,
+          courseId: chunk.courseId,
+          kind: chunk.kind,
+          title: chunk.title,
+          text,
+          // 摘要与正文同属一个命中卡片，共享卡片最终分；rrfScore 保留各自融合分。
+          score: item.rerankScore ?? item.score,
+          rrfScore: fusedItem?.score ?? 0,
+          ...(chunk.id === item.chunk.id && item.rerankScore !== undefined
+            ? { rerankScore: item.rerankScore } : {}),
+          denseRank: fusedItem?.denseRank,
+          keywordRank: fusedItem?.keywordRank,
+        });
+        contextChars += text.length;
+        if (truncated) break;
       }
-      hits.push({
-        chunkId: item.chunk.id,
-        cardId: item.chunk.cardId,
-        courseId: item.chunk.courseId,
-        kind: item.chunk.kind,
-        title: item.chunk.title,
-        text,
-        score: item.rerankScore ?? item.score,
-        rrfScore: item.score,
-        ...(item.rerankScore === undefined ? {} : { rerankScore: item.rerankScore }),
-        denseRank: item.denseRank,
-        keywordRank: item.keywordRank,
-      });
-      contextChars += text.length;
-      perCard.set(item.chunk.cardId, used + 1);
+      selectedCards.add(item.chunk.cardId);
       if (truncated) break;
     }
 
@@ -259,6 +273,39 @@ export class RagIndex {
         ...(rerankError === undefined ? {} : { rerankError }),
       },
     };
+  }
+
+  /** D-022：命中卡片返回摘要 + 定位到的正文片段，摘要排在正文之前。 */
+  private cardEvidence(
+    selected: RankedChunk,
+    fused: ReadonlyMap<string, FusedChunk>,
+  ): RagChunk[] {
+    const cardChunks = this.byCard.get(selected.chunk.cardId) ?? [selected.chunk];
+    const summary = cardChunks.find(chunk => chunk.kind === "summary");
+    const body = selected.chunk.kind === "body"
+      ? selected.chunk
+      : this.bestBody(cardChunks, fused);
+    const evidence: RagChunk[] = [];
+    if (summary) evidence.push(summary);
+    if (body && body.id !== summary?.id) evidence.push(body);
+    return evidence.length > 0 ? evidence : [selected.chunk];
+  }
+
+  private bestBody(
+    cardChunks: readonly RagChunk[],
+    fused: ReadonlyMap<string, FusedChunk>,
+  ): RagChunk | undefined {
+    let best: RagChunk | undefined;
+    let bestScore = -1;
+    for (const chunk of cardChunks) {
+      if (chunk.kind !== "body") continue;
+      const score = fused.get(chunk.id)?.score ?? -1;
+      if (score > bestScore) {
+        best = chunk;
+        bestScore = score;
+      }
+    }
+    return best;
   }
 
   private pickCandidates(

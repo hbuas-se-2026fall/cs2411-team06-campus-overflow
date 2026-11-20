@@ -34,11 +34,50 @@ describe("RAG 检索", () => {
   it("关键词与稠密召回经 RRF 返回相关片段", async () => {
     const index = await buildIndex();
     const result = await index.search("死锁", { topK: 2 });
-    expect(result.hits[0].chunkId).toBe("db#deadlock");
-    expect(result.hits[0].keywordRank).toBe(1);
-    expect(result.hits[0].denseRank).toBeGreaterThan(0);
+    const body = result.hits.find(hit => hit.chunkId === "db#deadlock");
+    expect(result.hits[0]?.cardId).toBe("db");
+    expect(result.hits[0]?.kind).toBe("summary");
+    expect(body).toBeDefined();
+    expect(body?.keywordRank).toBe(1);
+    expect(body?.denseRank).toBeGreaterThan(0);
     expect(result.diagnostics.fusedCandidates).toBeGreaterThan(0);
-    expect(result.hits[0].score).toBeCloseTo(1 / 61 + 1 / 61, 6);
+    expect(body?.score).toBeCloseTo(1 / 61 + 1 / 61, 6);
+  });
+
+  it("命中卡片同时返回摘要与定位到的正文（D-022）", async () => {
+    const index = await buildIndex();
+    const result = await index.search("死锁", { topK: 1 });
+
+    expect(result.hits.map(hit => [hit.chunkId, hit.kind])).toEqual([
+      ["db#acid", "summary"],
+      ["db#deadlock", "body"],
+    ]);
+    expect(result.hits[0]?.score).toBe(result.hits[1]?.score);
+  });
+
+  it("摘要命中时展开该卡最相关的正文", async () => {
+    const custom: RagChunk[] = [
+      {
+        id: "signal#summary", cardId: "signal", courseId: 1, kind: "summary", title: "信号量",
+        text: "信号量用于并发控制。",
+      },
+      {
+        id: "signal#body-0", cardId: "signal", courseId: 1, kind: "body", title: "信号量",
+        text: "PV 操作与互斥。",
+      },
+      {
+        id: "signal#body-1", cardId: "signal", courseId: 1, kind: "body", title: "信号量",
+        text: "计数器表示可用资源数。",
+      },
+    ];
+    const index = await RagIndex.build({
+      chunks: custom,
+      embedder: createHashEmbeddingProvider({ dimensions: 64 }),
+    });
+
+    const result = await index.search("信号量 PV", { topK: 1 });
+
+    expect(result.hits.map(hit => hit.chunkId)).toEqual(["signal#summary", "signal#body-0"]);
   });
 
   it("精确错误码优先命中", async () => {
@@ -136,7 +175,7 @@ describe("RAG 重排与重排后选择", () => {
     });
   });
 
-  it("默认同一卡片只占一个候选名额", async () => {
+  it("默认同一卡片只占一个候选名额，但返回摘要与正文", async () => {
     const index = await RagIndex.build({
       chunks,
       embedder: createHashEmbeddingProvider({ dimensions: 128 }),
@@ -145,7 +184,12 @@ describe("RAG 重排与重排后选择", () => {
 
     const result = await index.search("死锁 事务", { topK: 4 });
 
-    expect(new Set(result.hits.map(hit => hit.cardId)).size).toBe(result.hits.length);
+    const perCard = new Map<string, number>();
+    for (const hit of result.hits) {
+      perCard.set(hit.cardId, (perCard.get(hit.cardId) ?? 0) + 1);
+    }
+    expect(perCard.get("db")).toBe(2);
+    expect([...perCard.values()].every(count => count <= 2)).toBe(true);
     expect(result.diagnostics.cardCandidates).toBe(3);
     expect(result.diagnostics.cardCandidates).toBeLessThan(result.diagnostics.fusedCandidates);
   });
@@ -163,11 +207,13 @@ describe("RAG 重排与重排后选择", () => {
     });
 
     const result = await index.search("死锁", { topK: 2 });
+    const body = result.hits.find(hit => hit.chunkId === "db#deadlock");
 
     expect(result.hits.length).toBeGreaterThan(0);
-    expect(result.hits[0]?.chunkId).toBe("db#deadlock");
+    expect(result.hits[0]?.kind).toBe("summary");
+    expect(body).toBeDefined();
+    expect(body?.score).toBe(body?.rrfScore);
     expect(result.hits.every(hit => hit.rerankScore === undefined)).toBe(true);
-    expect(result.hits[0]?.score).toBe(result.hits[0]?.rrfScore);
     expect(result.diagnostics).toMatchObject({
       rerankApplied: false,
       rerankError: "http_500",
@@ -198,7 +244,9 @@ describe("RAG 重排与重排后选择", () => {
     const result = await index.search("死锁 错误码 调度 事务", { topK: 2 });
 
     expect(result.diagnostics.rerankCandidates).toBe(2);
-    expect(result.hits).toHaveLength(2);
+    expect(new Set(result.hits.map(hit => hit.cardId)).size).toBe(2);
+    expect(result.hits.length).toBeGreaterThanOrEqual(2);
+    expect(result.hits.length).toBeLessThanOrEqual(4);
   });
 
   it("超出总字符预算时截断最后一条", async () => {
