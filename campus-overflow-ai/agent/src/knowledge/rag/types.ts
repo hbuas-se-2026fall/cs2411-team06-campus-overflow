@@ -15,6 +15,21 @@ export interface EmbeddingProvider {
   embed(texts: readonly string[], signal?: AbortSignal): Promise<number[][]>;
 }
 
+export interface RerankResult {
+  index: number;
+  score: number;
+}
+
+/** 精排接口：复用 OpenAI 兼容 /rerank 服务；分数只用于排序与阈值，不代表概率。 */
+export interface RerankProvider {
+  readonly model: string;
+  rerank(
+    query: string,
+    documents: readonly string[],
+    options?: { topN?: number; signal?: AbortSignal },
+  ): Promise<RerankResult[]>;
+}
+
 export interface HnswOptions {
   dimensions: number;
   /** 每个节点的邻居上限，默认 16 */
