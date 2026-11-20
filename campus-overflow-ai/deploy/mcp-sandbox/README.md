@@ -16,11 +16,21 @@ docker compose up --build
 ## 隔离项
 
 - 非 root（`user: 1000:1000`）；
-- 根文件系统只读，`/tmp` 使用 `noexec,nosuid` 的 tmpfs；
+- 根文件系统只读，`/tmp` 使用 `noexec,nosuid,nodev` 的 tmpfs；
 - `cap_drop: ALL` 与 `no-new-privileges`；
-- CPU、内存、PID 上限；
+- CPU、内存（含 swap 上限）、PID、文件描述符上限；
+- `runtime: ${MCP_SANDBOX_RUNTIME:-runc}`：生产设置 `MCP_SANDBOX_RUNTIME=runsc` 启用 gVisor；
 - 不注入 `DB_*`、`MYSQL_*` 等数据库变量；
 - 只注册现有只读工具，不开放写工具。
+
+## gVisor 验证
+
+```bash
+docker run --rm --runtime=runsc alpine:3.20 uname -a
+MCP_SANDBOX_RUNTIME=runsc docker compose up --build
+```
+
+`docker compose config --quiet` 不校验运行时是否存在；未在 Linux 主机验证过 `runsc` 前，不得声称已启用 gVisor。
 
 ## 仍需在生产边界处理
 
