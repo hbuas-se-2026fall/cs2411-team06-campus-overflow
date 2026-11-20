@@ -128,13 +128,13 @@
 
   <!-- 连线 -->
   <g fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="540" y1="225" x2="540" y2="251" marker-end="url(#arrow)"/>
-    <path d="M 200 225 L 200 590 L 276 590" marker-end="url(#arrow-teal)"/>
-    <line x1="540" y1="505" x2="540" y2="531" marker-end="url(#arrow-teal)"/>
-    <line x1="800" y1="300" x2="836" y2="300" marker-end="url(#arrow)"/>
-    <line x1="800" y1="430" x2="836" y2="430" marker-end="url(#arrow)"/>
-    <line x1="380" y1="645" x2="380" y2="671" marker-end="url(#arrow)"/>
-    <path d="M 810 740 L 824 740 L 824 492 L 804 492" stroke-dasharray="6 5" marker-end="url(#arrow-amber)"/>
+    <line x1="540" y1="225" x2="540" y2="255" marker-end="url(#arrow)"/>
+    <path d="M 200 225 L 200 590 L 280 590" marker-end="url(#arrow-teal)"/>
+    <line x1="540" y1="505" x2="540" y2="535" marker-end="url(#arrow-teal)"/>
+    <line x1="800" y1="300" x2="840" y2="300" marker-end="url(#arrow)"/>
+    <line x1="800" y1="430" x2="840" y2="430" marker-end="url(#arrow)"/>
+    <line x1="380" y1="645" x2="380" y2="675" marker-end="url(#arrow)"/>
+    <path d="M 810 740 L 824 740 L 824 492 L 800 492" stroke-dasharray="6 5" marker-end="url(#arrow-amber)"/>
   </g>
 
   <g font-family="'Inter','Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#64748b">
