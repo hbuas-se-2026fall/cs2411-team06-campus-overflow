@@ -382,6 +382,8 @@ export function QuestionDetailView({
                       onCertify={(id, certified) => void handleCertify(id, certified)}
                       canRecommend={canRecommend}
                       onRecommend={(id, recommended) => void handleRecommend(id, recommended)}
+                      currentUsername={currentUser?.username}
+                      canModerate={currentUser?.role === USER_ROLE.admin}
                     />
                   </li>
                 ))}
@@ -395,7 +397,13 @@ export function QuestionDetailView({
             <AnswerForm onSubmit={handleCreateAnswer} />
           </section>
 
-          <CommentList questionId={detail.id} currentUsername={currentUser?.username} />
+          <CommentList
+            key={detail.id}
+            targetType="question"
+            targetId={detail.id}
+            currentUsername={currentUser?.username}
+            canModerate={currentUser?.role === USER_ROLE.admin}
+          />
         </div>
 
         <aside className="flex w-full shrink-0 flex-col gap-4 lg:w-[280px]">

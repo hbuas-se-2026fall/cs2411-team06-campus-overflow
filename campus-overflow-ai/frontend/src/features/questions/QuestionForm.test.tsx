@@ -21,7 +21,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push, back: mocks.back, replace: vi.fn() }),
 }));
-vi.mock("@/api/courses", () => ({ listCourses: mocks.listCourses }));
+vi.mock("@/api/courses", () => ({
+  listCourses: mocks.listCourses,
+  fetchCourses: mocks.listCourses,
+  fetchCourseDetail: vi.fn(async (id: number) => ({
+    id,
+    name: `课程 ${id}`,
+    code: `C${id}`,
+  })),
+}));
 vi.mock("@/api/tags", () => ({ listTags: mocks.listTags }));
 vi.mock("@/api/questions", () => ({
   createQuestion: mocks.createQuestion,

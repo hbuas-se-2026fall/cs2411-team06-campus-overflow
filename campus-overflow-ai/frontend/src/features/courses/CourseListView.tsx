@@ -12,6 +12,7 @@ import {
   Pagination,
   Select,
 } from "@/shared/components";
+import { COMMON_SEMESTER_OPTIONS } from "@/shared/constants/semester";
 import { usePagedList } from "@/shared/hooks/usePagedList";
 import { redirectToLogin } from "@/shared/utils/navigation";
 import type { Course, CourseListParams } from "@/shared/types/course";
@@ -33,9 +34,15 @@ const ALL_SEMESTER = { value: "", label: "全部学期" };
 
 // 课程列表（页面控件级设计说明 §2.4）：学期 Select + 搜索 Input + 3 列课程卡网格
 // 搜索走后端 GET /courses 的 keyword 参数（名称/编码模糊），不做前端过滤
-export function CourseListView() {
-  const [keywordDraft, setKeywordDraft] = useState("");
-  const [semester, setSemester] = useState("");
+export function CourseListView({
+  initialKeyword = "",
+  initialSemester = "",
+}: {
+  initialKeyword?: string;
+  initialSemester?: string;
+}) {
+  const [keywordDraft, setKeywordDraft] = useState(initialKeyword);
+  const [semester, setSemester] = useState(initialSemester);
 
   // 401（游客）转成哨兵错误，其余原样抛出由 toErrorMessage 转中文
   const fetchPage = useCallback(
@@ -49,27 +56,43 @@ export function CourseListView() {
     },
     [],
   );
-  const list = usePagedList<Course, CourseListParams>(fetchPage, {});
+  const list = usePagedList<Course, CourseListParams>(fetchPage, {
+    keyword: initialKeyword || undefined,
+    semester: initialSemester || undefined,
+  });
 
-  // 学期选项从当前页课程数据聚合去重；响应暂无 semester 字段时只有"全部学期"
   const semesterOptions = [
     ALL_SEMESTER,
-    ...collectSemesters(list.items).map((item) => ({ value: item, label: item })),
+    ...COMMON_SEMESTER_OPTIONS,
+    ...collectSemesters(list.items)
+      .filter((item) => !COMMON_SEMESTER_OPTIONS.some((option) => option.value === item))
+      .map((item) => ({ value: item, label: item })),
   ];
+  if (
+    initialSemester &&
+    !semesterOptions.some((option) => option.value === initialSemester)
+  ) {
+    semesterOptions.push({ value: initialSemester, label: initialSemester });
+  }
 
   function applyKeyword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    list.setParams({ keyword: keywordDraft.trim() || undefined, semester: semester || undefined });
+    const keyword = keywordDraft.trim();
+    replaceFiltersInUrl(keyword, semester);
+    list.setParams({ keyword: keyword || undefined, semester: semester || undefined });
   }
 
   function handleSemesterChange(next: string) {
     setSemester(next);
-    list.setParams({ keyword: keywordDraft.trim() || undefined, semester: next || undefined });
+    const keyword = keywordDraft.trim();
+    replaceFiltersInUrl(keyword, next);
+    list.setParams({ keyword: keyword || undefined, semester: next || undefined });
   }
 
   function clearFilters() {
     setKeywordDraft("");
     setSemester("");
+    replaceFiltersInUrl("", "");
     list.setParams({ keyword: undefined, semester: undefined });
   }
 
@@ -80,7 +103,7 @@ export function CourseListView() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-[22px] font-semibold text-ink">课程</h1>
         <div className="flex flex-wrap items-center gap-2">
-          {/* 学期筛选走后端 semester 精确参数；选项暂无法从响应聚合时仅剩"全部学期" */}
+          {/* 学期筛选走后端 semester 精确参数；常见学期固定提供，未知后台值动态补入 */}
           <Select
             aria-label="按学期筛选"
             options={semesterOptions}
@@ -155,4 +178,12 @@ export function CourseListView() {
       ) : null}
     </section>
   );
+}
+
+function replaceFiltersInUrl(keyword: string, semester: string): void {
+  const params = new URLSearchParams();
+  if (keyword) params.set("keyword", keyword);
+  if (semester) params.set("semester", semester);
+  const query = params.toString();
+  window.history.replaceState(null, "", query ? `/courses?${query}` : "/courses");
 }

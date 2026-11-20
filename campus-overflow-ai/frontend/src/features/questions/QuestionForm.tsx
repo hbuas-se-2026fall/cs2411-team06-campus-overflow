@@ -7,22 +7,18 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
-import { listCourses } from "@/api/courses";
 import { ApiError } from "@/api/client";
-import { useAsyncData } from "@/shared/hooks/useAsyncData";
+import { CourseSelect } from "@/features/courses/CourseSelect";
 import {
   Button,
   ErrorState,
   Input,
   MarkdownView,
-  Select,
   TagChip,
   TabNav,
   Textarea,
   Toast,
 } from "@/shared/components";
-import type { SelectOption } from "@/shared/components/Select";
-
 import { TagPicker, type PickedTag } from "./TagPicker";
 import {
   clearDraft,
@@ -78,7 +74,6 @@ export interface QuestionFormProps<T = unknown> {
 
 const TITLE_MAX = 100;
 const TITLE_MIN = 5;
-const COURSE_OPTION_LIMIT = 100;
 const PREVIEW_DEBOUNCE_MS = 1000;
 const DRAFT_SAVE_INTERVAL_MS = 30_000;
 const TOAST_DURATION_MS = 3000;
@@ -117,10 +112,6 @@ export function QuestionForm<T = unknown>({
   onDraftChange,
 }: QuestionFormProps<T>) {
   const router = useRouter();
-  const coursesState = useAsyncData(
-    () => listCourses({ page: 1, page_size: COURSE_OPTION_LIMIT }),
-    [],
-  );
 
   const [title, setTitle] = useState(initialValues?.title ?? "");
   const [content, setContent] = useState(initialValues?.content ?? "");
@@ -313,14 +304,6 @@ export function QuestionForm<T = unknown>({
     }
   }
 
-  const courseOptions: SelectOption[] = [
-    { value: "", label: "请选择课程" },
-    ...(coursesState.data?.items ?? []).map((course) => ({
-      value: String(course.id),
-      label: course.name,
-    })),
-  ];
-
   const isTitleOver = title.length > TITLE_MAX;
 
   return (
@@ -420,15 +403,23 @@ export function QuestionForm<T = unknown>({
           />
         </div>
 
-        <Select
-          label="课程"
-          value={courseId}
-          options={courseOptions}
-          disabled={lockCourse}
-          hint={lockCourse ? "课程发布后不可更改" : "问题将发布到所选课程的问答区"}
-          error={courseError ?? undefined}
-          onChange={(event) => setCourseId(event.target.value)}
-        />
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium text-ink-muted">课程</span>
+          <CourseSelect
+            label="课程"
+            value={courseId === "" ? undefined : Number(courseId)}
+            onChange={(next) => {
+              setCourseId(next === undefined ? "" : String(next));
+              setCourseError(null);
+            }}
+            placeholder="请选择课程"
+            disabled={lockCourse}
+          />
+          <p className="text-[12px] text-ink-subtle">
+            {lockCourse ? "课程发布后不可更改" : "问题将发布到所选课程的问答区"}
+          </p>
+          {courseError ? <p className="text-[12px] text-danger-ink">{courseError}</p> : null}
+        </div>
 
         {lockTags ? (
           <div className="flex flex-col gap-1.5">

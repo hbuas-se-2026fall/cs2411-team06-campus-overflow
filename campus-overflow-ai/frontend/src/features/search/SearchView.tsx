@@ -1,9 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { fetchCourses } from "@/api/courses";
 import { search } from "@/api/search";
+import { listTags } from "@/api/tags";
+import { CourseCard } from "@/features/courses/CourseCard";
+import {
+  createdFromForRange,
+  QuestionFilterBar,
+  type QuestionFilters,
+  type QuestionTimeRange,
+} from "@/features/home/QuestionFilterBar";
 import { QuestionCard } from "@/features/questions/QuestionCard";
 import {
   Button,
@@ -11,10 +21,13 @@ import {
   ErrorState,
   LoadingSkeleton,
   Pagination,
+  TagChip,
 } from "@/shared/components";
+import { useAsyncData } from "@/shared/hooks/useAsyncData";
 import { usePagedList } from "@/shared/hooks/usePagedList";
 import type { Paged } from "@/shared/types/common";
 import type { QuestionListItem } from "@/shared/types/question";
+import type { SearchParams } from "@/api/search";
 
 import {
   clearSearchHistory,
@@ -26,23 +39,19 @@ import {
 const PAGE_SIZE = 10;
 
 // 空关键词不发请求：返回空页，让页面走"输入关键词"引导空态
-function fetchSearchPage(query: {
-  q: string;
-  page: number;
-  page_size: number;
-}): Promise<Paged<QuestionListItem>> {
+function fetchSearchPage(query: SearchParams): Promise<Paged<QuestionListItem>> {
   if (!query.q) {
     return Promise.resolve({
       items: [],
       total: 0,
-      page: query.page,
-      page_size: query.page_size,
+      page: query.page ?? 1,
+      page_size: query.page_size ?? PAGE_SIZE,
     });
   }
-  return search({ q: query.q, page: query.page, page_size: query.page_size });
+  return search(query);
 }
 
-interface SearchQuery {
+interface SearchQuery extends QuestionFilters {
   keyword: string;
   page: number;
 }
@@ -56,19 +65,55 @@ function parsePositiveInt(raw: string | null): number | undefined {
 // URL 参数解析：q 为主（顶栏搜索框写入，spec「发现」），keyword 为兼容别名；默认值不写入 URL
 function parseSearchQuery(params: URLSearchParams): SearchQuery {
   const keyword = (params.get("q") ?? params.get("keyword") ?? "").trim();
-  return { keyword, page: parsePositiveInt(params.get("page")) ?? 1 };
+  return {
+    keyword,
+    courseId: parsePositiveInt(params.get("course_id")),
+    tagId: parsePositiveInt(params.get("tag_id")),
+    sort: params.get("sort") === "hot" ? "hot" : "latest",
+    unresolved: params.get("unresolved") === "1" || params.get("unresolved") === "true",
+    within: parseTimeRange(params.get("within")),
+    page: parsePositiveInt(params.get("page")) ?? 1,
+  };
+}
+
+function parseTimeRange(raw: string | null): QuestionTimeRange {
+  return raw === "day" || raw === "week" || raw === "month" ? raw : "any";
 }
 
 function buildSearchPath(query: SearchQuery): string {
   const params = new URLSearchParams();
   if (query.keyword) params.set("q", query.keyword);
+  if (query.courseId !== undefined) params.set("course_id", String(query.courseId));
+  if (query.tagId !== undefined) params.set("tag_id", String(query.tagId));
+  if (query.sort === "hot") params.set("sort", "hot");
+  if (query.unresolved) params.set("unresolved", "1");
+  if (query.within !== "any") params.set("within", query.within);
   if (query.page > 1) params.set("page", String(query.page));
   const queryString = params.toString();
   return queryString ? `/search?${queryString}` : "/search";
 }
 
 function querySignature(query: SearchQuery): string {
-  return `${query.keyword}|${query.page}`;
+  return [
+    query.keyword,
+    query.courseId ?? "",
+    query.tagId ?? "",
+    query.sort,
+    query.unresolved ? "1" : "0",
+    query.within,
+    query.page,
+  ].join("|");
+}
+
+function toSearchParams(query: SearchQuery): SearchParams {
+  return {
+    q: query.keyword,
+    course_id: query.courseId,
+    tag_id: query.tagId,
+    sort: query.sort,
+    unresolved: query.unresolved ? true : undefined,
+    created_from: createdFromForRange(query.within),
+  };
 }
 
 // 搜索记录页主组件（§2.17）：搜索框（自动聚焦/保留关键词）+ 历史 chips + 结果区（问题卡+分页）
@@ -79,10 +124,22 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
   const searchParams = useSearchParams();
 
   const [inputValue, setInputValue] = useState(initialKeyword);
-  // 已应用的搜索词（驱动结果区分支）；URL 里的关键词在测试/深链场景外与其一致
-  const [activeKeyword, setActiveKeyword] = useState(initialKeyword);
+  // 已应用的完整查询；本地提交先更新它，避免等待 router 异步回写 URL。
+  const [activeQuery, setActiveQuery] = useState<SearchQuery>(() =>
+    parseSearchQuery(searchParams),
+  );
   // 历史只在客户端挂载后读取，避免 SSR/CSR 首帧不一致
   const [history, setHistory] = useState<string[]>([]);
+  const courseMatches = useAsyncData(async () => {
+    const keyword = activeQuery.keyword.trim();
+    if (!keyword) return null;
+    return fetchCourses({ page: 1, page_size: 6, keyword });
+  }, [activeQuery.keyword]);
+  const tagMatches = useAsyncData(async () => {
+    const keyword = activeQuery.keyword.trim();
+    if (!keyword) return null;
+    return listTags({ keyword });
+  }, [activeQuery.keyword]);
 
   const {
     items,
@@ -94,10 +151,16 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
     reload,
     setParams,
     setPage,
-  } = usePagedList(fetchSearchPage, { q: initialKeyword }, PAGE_SIZE);
+  } = usePagedList(
+    fetchSearchPage,
+    toSearchParams(parseSearchQuery(searchParams)),
+    PAGE_SIZE,
+  );
 
   // appliedRef 记录已应用的查询签名：内部提交先行标记，URL effect 到来时跳过，避免双拉
-  const appliedRef = useRef<string>(querySignature({ keyword: initialKeyword, page: 1 }));
+  const appliedRef = useRef<string>(
+    querySignature({ ...parseSearchQuery(searchParams), page: 1 }),
+  );
 
   useEffect(() => {
     let active = true;
@@ -117,13 +180,13 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
     const signature = querySignature(next);
     if (signature === appliedRef.current) return;
     appliedRef.current = signature;
-    setActiveKeyword(next.keyword);
+    setActiveQuery(next);
     if (next.page > 1) {
       // setParams + setPage 同批提交，只触发一次重取（深链直达第 N 页）
-      setParams({ q: next.keyword });
+      setParams(toSearchParams(next));
       setPage(next.page);
     } else {
-      setParams({ q: next.keyword }); // setParams 内部会重置回第 1 页
+      setParams(toSearchParams(next)); // setParams 内部会重置回第 1 页
     }
   }, [searchParams, setParams, setPage]);
 
@@ -133,12 +196,12 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
     void (async () => {
       // 先让出同步执行栈：避免在 effect 中同步 setState（react-hooks/set-state-in-effect）
       await Promise.resolve();
-      if (!cancelled) setInputValue(activeKeyword);
+      if (!cancelled) setInputValue(activeQuery.keyword);
     })();
     return () => {
       cancelled = true;
     };
-  }, [activeKeyword]);
+  }, [activeQuery.keyword]);
 
   const handleSearch = useCallback(
     (rawKeyword: string) => {
@@ -146,21 +209,36 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
       if (!keyword) return;
       // 新搜索先写历史（置顶去重），再应用查询并写 URL
       setHistory(saveSearchKeyword(window.localStorage, keyword));
-      appliedRef.current = querySignature({ keyword, page: 1 });
-      setActiveKeyword(keyword);
-      setParams({ q: keyword });
-      router.replace(buildSearchPath({ keyword, page: 1 }));
+      const next = { ...activeQuery, keyword, page: 1 };
+      appliedRef.current = querySignature(next);
+      setActiveQuery(next);
+      setParams(toSearchParams(next));
+      router.replace(buildSearchPath(next));
     },
-    [router, setParams],
+    [activeQuery, router, setParams],
   );
 
   const handlePageChange = useCallback(
     (nextPage: number) => {
-      appliedRef.current = querySignature({ keyword: activeKeyword, page: nextPage });
+      const next = { ...activeQuery, page: nextPage };
+      appliedRef.current = querySignature(next);
+      setActiveQuery(next);
       setPage(nextPage);
-      router.replace(buildSearchPath({ keyword: activeKeyword, page: nextPage }));
+      router.replace(buildSearchPath(next));
     },
-    [activeKeyword, router, setPage],
+    [activeQuery, router, setPage],
+  );
+
+  const handleFiltersChange = useCallback(
+    (patch: Partial<QuestionFilters>) => {
+      const next = { ...activeQuery, ...patch, page: 1 };
+      if (!next.keyword) return;
+      appliedRef.current = querySignature(next);
+      setActiveQuery(next);
+      setParams(toSearchParams(next));
+      router.replace(buildSearchPath(next));
+    },
+    [activeQuery, router, setParams],
   );
 
   const handleAsk = useCallback(() => {
@@ -173,8 +251,18 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
     handleSearch(inputValue);
   }
 
-  const hasKeyword = activeKeyword !== "";
-  const isReady = !isLoading && error === null;
+  const hasKeyword = activeQuery.keyword !== "";
+  const showCourseMatches =
+    hasKeyword &&
+    !courseMatches.isLoading &&
+    courseMatches.error === null &&
+    (courseMatches.data?.items.length ?? 0) > 0;
+  const showTagMatches =
+    hasKeyword &&
+    !tagMatches.isLoading &&
+    tagMatches.error === null &&
+    (tagMatches.data?.items.length ?? 0) > 0;
+  const hasRelated = showCourseMatches || showTagMatches;
 
   return (
     <div className="flex flex-col gap-5">
@@ -185,13 +273,61 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
         <input
           value={inputValue}
           onChange={(event) => setInputValue(event.target.value)}
-          placeholder="搜索问题关键词"
-          aria-label="搜索问题"
+          placeholder="搜索问题、课程或标签"
+          aria-label="全站搜索"
           autoFocus
           className="co-focusable h-10 w-full max-w-[520px] rounded-md border border-line bg-canvas px-3 text-[14px] text-ink transition-colors duration-150 ease-standard placeholder:text-ink-subtle hover:border-ink-subtle focus:border-brand focus:ring-2 focus:ring-brand/20"
         />
         <Button type="submit">搜索</Button>
       </form>
+
+      {hasKeyword ? (
+        <QuestionFilterBar
+          filters={activeQuery}
+          onChange={handleFiltersChange}
+          onAsk={handleAsk}
+        />
+      ) : null}
+
+      {showCourseMatches ? (
+        <section aria-label="相关课程" className="flex flex-col gap-3">
+          <h2 className="text-[16px] font-semibold text-ink">
+            相关课程
+            <span className="ml-2 text-[12px] font-normal text-ink-subtle">
+              共 {courseMatches.data?.total ?? 0} 门
+            </span>
+            <Link
+              href={`/courses?keyword=${encodeURIComponent(activeQuery.keyword.trim())}`}
+              className="co-focusable ml-3 text-[12px] font-normal text-brand hover:underline"
+            >
+              查看全部课程
+            </Link>
+          </h2>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {courseMatches.data?.items.map((course) => (
+              <CourseCard key={course.id} course={course} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {showTagMatches ? (
+        <section aria-label="相关标签" className="flex flex-col gap-2">
+          <h2 className="text-[16px] font-semibold text-ink">相关标签</h2>
+          <div className="flex flex-wrap gap-2">
+            {tagMatches.data?.items.map((tag) => (
+              <Link
+                key={tag.id}
+                href={`/tags/${tag.id}`}
+                aria-label={`标签 ${tag.name}`}
+                className="co-focusable rounded-full"
+              >
+                <TagChip label={tag.name} />
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {/* 搜索历史 chips：逐条可删 + 一键清空；历史为空隐藏整块 */}
       {history.length > 0 ? (
@@ -232,8 +368,8 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
       <section aria-label="搜索结果" className="flex flex-col gap-4">
         {!hasKeyword ? (
           <EmptyState
-            title="输入关键词，搜索站内问题"
-            description="支持按问题全文检索，试试课程名、知识点或报错信息。"
+            title="输入关键词，搜索问题、课程和标签"
+            description="输入课程名、知识点或报错信息，一次查看相关问答、课程和标签。"
             actionLabel="直接提问"
             onAction={handleAsk}
           />
@@ -243,8 +379,12 @@ export function SearchView({ initialKeyword }: { initialKeyword: string }) {
           <ErrorState message={error} onRetry={reload} />
         ) : items.length === 0 ? (
           <EmptyState
-            title="未找到相关内容，换个关键词试试"
-            description="可以简化关键词再搜一次，或直接发起提问让同学和老师来解答。"
+            title={hasRelated ? "没有相关问题" : "未找到相关内容，换个关键词试试"}
+            description={
+              hasRelated
+                ? "上方已有相关课程或标签，你也可以直接发起提问。"
+                : "可以简化关键词再搜一次，或直接发起提问让同学和老师来解答。"
+            }
             actionLabel="直接提问"
             onAction={handleAsk}
           />

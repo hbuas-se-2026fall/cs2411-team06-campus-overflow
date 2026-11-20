@@ -4,26 +4,41 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ApiError } from "@/api/client";
 import {
+  createAnswerComment,
   createQuestionComment,
   deleteComment,
-  fetchQuestionComments,
-} from "@/api/questions";
-import { ConfirmDialog, EmptyState, ErrorState, LoadingSkeleton } from "@/shared/components";
+  listAnswerComments,
+  listQuestionComments,
+} from "@/api/comments";
+import {
+  ConfirmDialog,
+  EmptyState,
+  ErrorState,
+  LoadingSkeleton,
+  Pagination,
+} from "@/shared/components";
 import { COMMENT_MAX_LEN } from "@/shared/constants/domain";
 import type { CommentListItem } from "@/shared/types/question";
 import { formatRelativeTime } from "@/shared/utils/format";
 import { isAuthorOf } from "@/shared/utils/ownership";
 
 type LoadStatus = "loading" | "ready" | "error";
+const PAGE_SIZE = 20;
 
 export function CommentList({
-  questionId,
+  targetType,
+  targetId,
   currentUsername,
+  canModerate = false,
 }: {
-  questionId: number;
+  targetType: "question" | "answer";
+  targetId: number;
   currentUsername?: string | null;
+  canModerate?: boolean;
 }) {
   const [items, setItems] = useState<CommentListItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [body, setBody] = useState("");
   const [replyTo, setReplyTo] = useState<number | null>(null);
@@ -40,9 +55,13 @@ export function CommentList({
       if (cancelled) return;
       setStatus("loading");
       try {
-        const result = await fetchQuestionComments(questionId);
+        const params = { page, page_size: PAGE_SIZE };
+        const result = targetType === "question"
+          ? await listQuestionComments(targetId, params)
+          : await listAnswerComments(targetId, params);
         if (cancelled) return;
         setItems(result.items);
+        setTotal(result.total);
         setStatus("ready");
       } catch {
         if (!cancelled) setStatus("error");
@@ -51,7 +70,7 @@ export function CommentList({
     return () => {
       cancelled = true;
     };
-  }, [questionId, reloadToken]);
+  }, [targetType, targetId, page, reloadToken]);
 
   const reload = useCallback(() => setReloadToken((token) => token + 1), []);
 
@@ -63,14 +82,26 @@ export function CommentList({
     setPending(true);
     setError(null);
     try {
-      await createQuestionComment(questionId, text.trim(), parentId);
+      if (targetType === "question") {
+        await createQuestionComment(targetId, {
+          body: text.trim(),
+          ...(parentId ? { parent_id: parentId } : {}),
+        });
+      } else {
+        await createAnswerComment(targetId, {
+          body: text.trim(),
+          ...(parentId ? { parent_id: parentId } : {}),
+        });
+      }
       if (parentId) {
         setReplyBody("");
         setReplyTo(null);
+        reload();
       } else {
         setBody("");
+        if (page === 1) reload();
+        else setPage(1);
       }
-      reload();
     } catch (caught) {
       // 400 空内容 / 400 父评论不合法（回复的回复）/ 403 封禁
       setError(caught instanceof ApiError ? caught.message : "提交失败，请稍后重试");
@@ -95,8 +126,11 @@ export function CommentList({
   }
 
   return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-[18px] font-semibold text-ink">{items.length} 条评论</h2>
+    <section
+      aria-label={targetType === "question" ? "问题评论" : "回答评论"}
+      className="flex flex-col gap-3"
+    >
+      <h2 className="text-[18px] font-semibold text-ink">{total} 条评论</h2>
 
       {status === "loading" ? <LoadingSkeleton variant="list" count={2} /> : null}
       {status === "error" ? (
@@ -115,7 +149,7 @@ export function CommentList({
                 author={comment.author}
                 body={comment.body}
                 createdAt={comment.created_at}
-                canDelete={isAuthorOf(currentUsername, comment.author)}
+                canDelete={canModerate || isAuthorOf(currentUsername, comment.author)}
                 onDelete={() => setDeleteTarget(comment.id)}
                 onReply={() => {
                   setReplyTo(replyTo === comment.id ? null : comment.id);
@@ -131,7 +165,7 @@ export function CommentList({
                         author={reply.author}
                         body={reply.body}
                         createdAt={reply.created_at}
-                        canDelete={isAuthorOf(currentUsername, reply.author)}
+                        canDelete={canModerate || isAuthorOf(currentUsername, reply.author)}
                         onDelete={() => setDeleteTarget(reply.id)}
                       />
                     </li>
@@ -177,6 +211,10 @@ export function CommentList({
             </li>
           ))}
         </ul>
+      ) : null}
+
+      {status === "ready" && total > PAGE_SIZE ? (
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
       ) : null}
 
       {error ? (

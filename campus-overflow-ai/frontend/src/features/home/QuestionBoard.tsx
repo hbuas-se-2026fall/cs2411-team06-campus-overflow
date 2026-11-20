@@ -1,11 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-import { listCourses } from "@/api/courses";
 import { listQuestions } from "@/api/questions";
-import { listTags } from "@/api/tags";
 import { useAsyncData } from "@/shared/hooks/useAsyncData";
 import { usePagedList } from "@/shared/hooks/usePagedList";
 import { useSessionStore } from "@/shared/stores/session-store";
@@ -14,12 +12,15 @@ import type { QuestionListParams, QuestionSort } from "@/shared/types/question";
 
 import { QuestionCard } from "@/features/questions/QuestionCard";
 
-import { QuestionFilterBar, type QuestionFilters } from "./QuestionFilterBar";
+import {
+  createdFromForRange,
+  QuestionFilterBar,
+  type QuestionFilters,
+  type QuestionTimeRange,
+} from "./QuestionFilterBar";
 import { RightRail } from "./RightRail";
 
 const PAGE_SIZE = 10;
-// 课程 Select 选项上限：取足够大的一页以覆盖选项与课程名映射
-const COURSE_OPTION_LIMIT = 100;
 
 // URL 持有的全部筛选条件（course_id/tag_id/sort/unresolved/page）
 interface BoardFilters extends QuestionFilters {
@@ -38,8 +39,13 @@ export function parseBoardFilters(params: URLSearchParams): BoardFilters {
     tagId: parsePositiveInt(params.get("tag_id")),
     sort: params.get("sort") === "hot" ? "hot" : "latest",
     unresolved: params.get("unresolved") === "1" || params.get("unresolved") === "true",
+    within: parseTimeRange(params.get("within")),
     page: parsePositiveInt(params.get("page")) ?? 1,
   };
+}
+
+function parseTimeRange(raw: string | null): QuestionTimeRange {
+  return raw === "day" || raw === "week" || raw === "month" ? raw : "any";
 }
 
 // 发给接口的查询：缺省值不传（unresolved=false、latest 均为后端默认）
@@ -49,6 +55,7 @@ function filtersToQuery(filters: BoardFilters): QuestionListParams {
     tag_id: filters.tagId,
     sort: filters.sort,
     unresolved: filters.unresolved ? true : undefined,
+    created_from: createdFromForRange(filters.within),
   };
 }
 
@@ -59,6 +66,7 @@ function filtersToPath(filters: BoardFilters): string {
   if (filters.tagId !== undefined) params.set("tag_id", String(filters.tagId));
   if (filters.sort === "hot") params.set("sort", "hot");
   if (filters.unresolved) params.set("unresolved", "1");
+  if (filters.within !== "any") params.set("within", filters.within);
   if (filters.page > 1) params.set("page", String(filters.page));
   const query = params.toString();
   return query ? `/?${query}` : "/";
@@ -70,6 +78,7 @@ function filtersSignature(filters: BoardFilters): string {
     filters.tagId ?? "",
     filters.sort,
     filters.unresolved ? "1" : "0",
+    filters.within,
     filters.page,
   ].join("|");
 }
@@ -132,30 +141,13 @@ export function QuestionBoard() {
     router.push(`/auth/login?returnTo=${encodeURIComponent("/questions/new")}`);
   }, [router, sessionStatus]);
 
-  // 课程选项 + course_id → 课程名映射（问题卡展示用）
-  const coursesState = useAsyncData(
-    () => listCourses({ page: 1, page_size: COURSE_OPTION_LIMIT }),
-    [],
-  );
-  const courseNameById = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const course of coursesState.data?.items ?? []) map.set(course.id, course.name);
-    return map;
-  }, [coursesState.data]);
-  const courseNameOf = useCallback(
-    (courseId: number) => courseNameById.get(courseId) ?? `课程 ${courseId}`,
-    [courseNameById],
-  );
-
-  // 标签选项（Select 用全量列表；右栏热门标签由 RightRail 自行拉 hot）
-  const tagsState = useAsyncData(() => listTags({}), []);
-
   const currentFilters = parseBoardFilters(searchParams);
   // 只看会减少结果集的筛选（排序不算），决定 0 条时用哪种空态文案
   const hasActiveFilter =
     currentFilters.courseId !== undefined ||
     currentFilters.tagId !== undefined ||
-    currentFilters.unresolved;
+    currentFilters.unresolved ||
+    currentFilters.within !== "any";
 
   return (
     <div className="flex flex-col gap-5">
@@ -163,9 +155,6 @@ export function QuestionBoard() {
 
       <QuestionFilterBar
         filters={currentFilters}
-        courses={coursesState.data?.items ?? []}
-        tags={tagsState.data?.items ?? []}
-        isTaxonomyLoading={coursesState.isLoading || tagsState.isLoading}
         onChange={updateFilters}
         onAsk={handleAsk}
       />
@@ -190,6 +179,7 @@ export function QuestionBoard() {
                     tagId: undefined,
                     unresolved: false,
                     sort: "latest",
+                    within: "any",
                   })
                 }
               />
@@ -207,7 +197,7 @@ export function QuestionBoard() {
               <ul className="flex flex-col gap-3">
                 {items.map((question) => (
                   <li key={question.id}>
-                    <QuestionCard question={question} courseName={courseNameOf(question.course_id)} />
+                    <QuestionCard question={question} />
                   </li>
                 ))}
               </ul>

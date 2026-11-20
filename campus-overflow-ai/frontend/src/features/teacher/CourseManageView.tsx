@@ -141,8 +141,8 @@ export function CourseManageView({ courseId }: { courseId: number }) {
       <TabNav tabs={TABS} active={tab} onChange={setTab} />
 
       {tab === "questions" ? <QuestionsTab courseId={courseId} /> : null}
-      {tab === "members" ? <MembersTab courseId={courseId} showToast={showToast} /> : null}
-      {tab === "tags" ? <TagsTab tags={detail.aggregates.tags} showToast={showToast} /> : null}
+      {tab === "members" ? <MembersTab courseId={courseId} /> : null}
+      {tab === "tags" ? <TagsTab tags={detail.aggregates.tags} /> : null}
       {tab === "settings" ? <SettingsTab detail={detail} /> : null}
 
       <CourseFormModal

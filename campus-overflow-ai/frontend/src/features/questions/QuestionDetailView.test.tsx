@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -11,8 +11,10 @@ const mocks = vi.hoisted(() => ({
   certifyAnswer: vi.fn(),
   uncertifyAnswer: vi.fn(),
   createAnswer: vi.fn(),
-  fetchQuestionComments: vi.fn(),
+  listQuestionComments: vi.fn(),
+  listAnswerComments: vi.fn(),
   createQuestionComment: vi.fn(),
+  createAnswerComment: vi.fn(),
   deleteComment: vi.fn(),
   bindQuestionTags: vi.fn(),
   suggestTags: vi.fn(),
@@ -36,10 +38,14 @@ vi.mock("@/api/questions", () => ({
   certifyAnswer: mocks.certifyAnswer,
   uncertifyAnswer: mocks.uncertifyAnswer,
   createAnswer: mocks.createAnswer,
-  fetchQuestionComments: mocks.fetchQuestionComments,
-  createQuestionComment: mocks.createQuestionComment,
-  deleteComment: mocks.deleteComment,
   bindQuestionTags: mocks.bindQuestionTags,
+}));
+vi.mock("@/api/comments", () => ({
+  listQuestionComments: mocks.listQuestionComments,
+  listAnswerComments: mocks.listAnswerComments,
+  createQuestionComment: mocks.createQuestionComment,
+  createAnswerComment: mocks.createAnswerComment,
+  deleteComment: mocks.deleteComment,
 }));
 vi.mock("@/api/agent-assist", () => ({
   JUST_CREATED_QUESTION_KEY: "co_just_created_question",
@@ -124,8 +130,10 @@ beforeEach(() => {
   mocks.certifyAnswer.mockReset();
   mocks.uncertifyAnswer.mockReset();
   mocks.createAnswer.mockReset();
-  mocks.fetchQuestionComments.mockReset().mockResolvedValue({ items: [], total: 0, page: 1 });
+  mocks.listQuestionComments.mockReset().mockResolvedValue({ items: [], total: 0, page: 1 });
+  mocks.listAnswerComments.mockReset().mockResolvedValue({ items: [], total: 0, page: 1 });
   mocks.createQuestionComment.mockReset();
+  mocks.createAnswerComment.mockReset();
   mocks.deleteComment.mockReset();
   mocks.bindQuestionTags.mockReset().mockResolvedValue({});
   mocks.suggestTags.mockReset().mockResolvedValue({
@@ -307,6 +315,21 @@ describe("QuestionDetailView", () => {
     expect(await screen.findByText("数据结构")).toBeTruthy();
     expect(screen.getByText("已采纳")).toBeTruthy();
     expect(screen.getByText("teacher01")).toBeTruthy();
+  });
+
+  it("回答卡按需展开评论区并调用回答评论接口", async () => {
+    render(<QuestionDetailView questionId={4} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "评论" }));
+
+    await waitFor(() =>
+      expect(mocks.listAnswerComments).toHaveBeenCalledWith(1, {
+        page: 1,
+        page_size: 20,
+      }),
+    );
+    const answerComments = screen.getByRole("region", { name: "回答评论" });
+    expect(within(answerComments).getByRole("heading", { name: "0 条评论" })).toBeTruthy();
   });
 
   it("刚发布的问题确认标签后刷新详情并提示标签已更新", async () => {
