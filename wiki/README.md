@@ -21,8 +21,10 @@ CampusOverflow AI：面向高校课程场景的 AI 问答与内容治理平台�
 
 ## 当前状态
 
-- 业务后端一期完成，二期继续扩展；前端持续补完。
-- Agent 的治理、工具、RAG、MCP 主链路已实现，相关能力默认关闭。
+- 业务后端一期完成；前端 F-C1～F-C5 完成，F-C6 未完成。
+- Agent 的治理、工具、RAG、MCP 主链路已实现，相关能力默认关闭；T-14～T-17 剩余子项已在 `specs/tasks.md` 登记，父任务未验收。
+- RAG 管线已补齐 rerank、5→3、摘要+正文、子问题拆解与诊断；真实 embedding、50 题评测、阈值校准与拒答未完成。
+- 生产部署尚未完成：仅 backend + MySQL Compose，缺 frontend/agent 镜像、Nginx、SSL、迁移与备份。
 - 效果类结论仍缺真实 embedding、人工标注评测集与生产部署证据，Wiki 中不给出未经测得的数字。
 
 ## 维护约定

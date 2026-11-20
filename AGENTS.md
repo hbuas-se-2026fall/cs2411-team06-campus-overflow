@@ -12,8 +12,7 @@ CampusOverflow AI：面向高校课程场景的智能问答平台。三个服务
 | 前端 | `campus-overflow-ai/frontend/` | Next.js 16（App Router）+ React 19 + TypeScript 5 + Tailwind CSS 4 + @ai-sdk/react（Agent 流式 UI） | 二期补完中 |
 | Agent 服务 | `campus-overflow-ai/agent/` | TypeScript 5 + Vercel AI SDK 7 + Hono/Nitro + Workflow + Zod v4 + MCP Adapter（Node ≥ 24.0.0，ESM；2026-11-03随agent-browser升级） | 二期实施中，Workflow治理接线仍按WF分期 |
 
-> **范围说明**（spec v3 / Q-08，2026-09-20）：本期只做业务后端；Agent 服务不搭建（`/internal/agent/*` 仅保留前缀注释与 TODO 事件钩子），治理逻辑仅建表 + 501 占位；前端页面随第二阶段实施。
-> **当前范围**（2026-10-10）：一期业务后端（T-01~T-10）与二期 T-11~T-13 已完成；前端在代码基线内并持续补完，F-C5 助教申请、教师审核与助教推荐入口已随 PR #28 落地。T-14~T-17 尚未实施；Phase 4（T-18~T-20）推迟至第三期部署阶段。46e3bf8 同批后端契约接口（`mine`、`is_owner`/`can_post`、`course_name`、`GET /api/users/{id}/questions|answers`、`GET /api/tags/{id}`、PATCH 显式清空）为正式接口，保留不删。
+> **当前范围**（2026-11-21，覆盖旧范围注）：一期 T-01~T-10 与二期 T-11~T-13 已完成；T-14~T-17 主体已交付，剩余 M-03/M-04、T-15-E/F/G、T-16-C/D、T-17 N-03~N-07 已在 `specs/tasks.md` 登记，父任务保持未验收；Phase 4（T-18~T-20）仍推迟至第三期；前端 F-C1~F-C5 完成，F-C6 未完成。46e3bf8 同批后端契约接口为正式接口，保留不删。旧 Q-08“本期只做业务后端”表述已被本段取代。
 > **角色模型**（spec v3）：RBAC 三角色 student / teacher / admin；助教不是独立角色——研究生身份且助教认证通过 → 助教能力位（`require_graduate_assistant`），解锁学生端助教板块（US-20）。
 
 文档与规格在根目录：`docs/`（需求、架构、流程）、`specs/`（constitution/spec/plan/tasks/analyze）、`.trae/rules/`（工程规则）。
@@ -51,7 +50,7 @@ CampusOverflow AI：面向高校课程场景的智能问答平台。三个服务
 6. 界面文案使用简体中文。（一期指后端错误消息与接口描述文案）
 7. 规则必须是可检查的：代码需通过 `ruff check`（后端）、`eslint`（前端/Agent）零 error。
 8. 核心流程必须有测试：后端 pytest、前端与 Agent vitest。（编写要求不变；执行分层为开发期冒烟、CI 全量，见 [.trae/rules/coding-style.md](./.trae/rules/coding-style.md) "测试执行分层"）
-9. **子 Agent 上下文隔离**：Agent 采用主 Agent 编排 + 子 Agent 池，每实例最多 8 个（3 治理 + 5 问答）；任务间不得共享可变上下文、凭证、会话或工具授权，槽位复用必须整体重建；子 Agent 不写共享记忆，外部执行走沙箱。（C-09；设计见 plan AX-R09，任务 SA-01～SA-06 尚未实施）
+9. **子 Agent 上下文隔离**：Agent 采用主 Agent 编排 + 子 Agent 池，每实例最多 8 个（3 治理 + 5 问答）；任务间不得共享可变上下文、凭证、会话或工具授权，槽位复用必须整体重建；子 Agent 不写共享记忆，外部执行走沙箱。（C-09；设计见 plan AX-R09；SA-01/02B/06 已落地，SA-03/04/05 待生产验收，状态以 `specs/tasks.md` 为准）
 
 ## 常用命令
 
