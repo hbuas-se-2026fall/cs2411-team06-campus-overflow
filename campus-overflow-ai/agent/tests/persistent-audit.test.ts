@@ -3,6 +3,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 
 import { createApp } from "../src/app";
 import { auditStub } from "./helpers/audit-stub";
+import { chatStreamStub } from "./helpers/chat-stream-stub";
 import { approvedReview } from "./helpers/review-response";
 
 afterEach(() => vi.restoreAllMocks());
@@ -35,12 +36,12 @@ function fixture(options: { generateReason?: FinishReason; generateAt?: number;
     ...(options.missingFinish ? [] : [{ type: "finish" as const,
       finishReason: { unified: options.streamReason ?? "stop", raw: undefined }, usage }]),
   ] }) }));
-  const client = { audit,
+  const client = chatStreamStub().apply({ audit,
     resolvePrincipal: vi.fn().mockResolvedValue({ user_id: 3, role: "student", status: "active",
       identity_type: "undergraduate", assistant_cert_status: "none" }),
     fetchTags: vi.fn().mockResolvedValue([{ id: 7, name: "private-body", type: "tech" }]),
     searchCourses: vi.fn(), searchQuestions: vi.fn(), fetchModerationTarget: vi.fn(),
-  };
+  });
   const model = new MockLanguageModelV4({ doGenerate: generate, doStream: stream });
   const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
   const app = createApp({ getModel: () => model, createClient: () => client });

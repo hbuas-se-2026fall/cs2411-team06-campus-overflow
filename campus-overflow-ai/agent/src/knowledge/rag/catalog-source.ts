@@ -60,6 +60,7 @@ export const collectCatalogChunks = async (
       kind: "summary",
       title,
       text: `${card.domain}\n${card.summary}`,
+      tagIds: card.metadata.tag_ids,
     });
     const body = await catalog.getBody(item.id, courseIds, index.version);
     if (!body) continue;
@@ -71,6 +72,7 @@ export const collectCatalogChunks = async (
         kind: "body",
         title,
         text: part,
+        tagIds: card.metadata.tag_ids,
       });
     });
   }

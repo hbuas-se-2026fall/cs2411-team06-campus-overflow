@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -6,22 +5,39 @@ import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { promisify } from "node:util";
 import { z } from "zod";
 import { checkSignal } from "../loop/abort.js";
+import { readSandboxPolicy } from "../sandbox/config.js";
+import { createBackendSandboxAudit } from "../sandbox/audit.js";
+import { runSandboxed } from "../sandbox/executor.js";
 import { fetchPublicPage, type PublicPage } from "./public-fetch.js";
 import { pageText } from "./page-text.js";
 
-const runFile = promisify(execFile);
 export interface WebPage { url: string; content: string }
-export interface ReaderInvocation { executable: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string; signal?: AbortSignal; timeoutMs?: number }
+export interface ReaderInvocation {
+  executable: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string;
+  signal?: AbortSignal; timeoutMs?: number; traceId?: string;
+}
 export type BrowserRunner = (invocation: ReaderInvocation) => Promise<string>;
-const execute: BrowserRunner = async request => (await runFile(request.executable, request.args, {
-  env: request.env, cwd: request.cwd, signal: request.signal, timeout: request.timeoutMs ?? 20_000, maxBuffer: 1_000_000, windowsHide: true,
-})).stdout;
+// P0-2：浏览器 CLI 是唯一的外部进程，统一走沙箱执行器；只允许回环桥接，不经过 shell。
+// P0-4：审计经后端持久化；上报失败只记日志，不改变读取结果。
+const execute: BrowserRunner = async request => runSandboxed({
+  tool: "agent-browser",
+  executable: request.executable,
+  args: request.args,
+  cwd: request.cwd,
+  env: request.env,
+  signal: request.signal,
+  timeoutMs: request.timeoutMs,
+  actionClass: "read",
+  traceId: request.traceId,
+}, { ...readSandboxPolicy(), networkMode: "loopback", allowHosts: [] },
+{ audit: createBackendSandboxAudit() });
 
 /** 显式配置替代用户全局配置；子进程不继承服务、模型、代理或浏览器凭据。 */
-const prepareReader = async (folder: string, bridge: string, signal?: AbortSignal): Promise<ReaderInvocation> => {
+const prepareReader = async (
+  folder: string, bridge: string, signal?: AbortSignal, traceId?: string,
+): Promise<ReaderInvocation> => {
   const config = join(folder, "config.json"); const policy = join(folder, "policy.json");
   await writeFile(config, JSON.stringify({ maxOutput: 20_000 }));
   await writeFile(policy, JSON.stringify({ default: "deny", allow: ["launch", "read", "close"] }));
@@ -30,7 +46,7 @@ const prepareReader = async (folder: string, bridge: string, signal?: AbortSigna
   const platform = process.platform === "linux" && !report.header?.glibcVersionRuntime ? "linux-musl" : process.platform;
   const binary = join(dirname(packagePath), "bin", `agent-browser-${platform}-${process.arch}${process.platform === "win32" ? ".exe" : ""}`);
   if (!existsSync(binary)) throw new Error("当前平台的agent-browser二进制未安装");
-  return { executable: binary, cwd: folder, signal,
+  return { executable: binary, cwd: folder, signal, traceId,
     args: ["--config", config, "--action-policy", policy,
       "--session", `web-${randomUUID()}`, "--json", "read", bridge, "--require-md", "--timeout", "15000"],
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, TEMP: folder, TMP: folder,
@@ -38,7 +54,9 @@ const prepareReader = async (folder: string, bridge: string, signal?: AbortSigna
 };
 
 /** 只将已校验的公开正文桥接给read；CLI不直接访问外部URL或启动Chrome。 */
-export const extractWithBrowser = async (page: PublicPage, signal?: AbortSignal, runner: BrowserRunner = execute): Promise<WebPage> => {
+export const extractWithBrowser = async (
+  page: PublicPage, signal?: AbortSignal, runner: BrowserRunner = execute, traceId?: string,
+): Promise<WebPage> => {
   checkSignal(signal);
   const text = pageText(page);
   if (!text.trim()) throw new Error("网页没有可读取的文本");
@@ -53,7 +71,7 @@ export const extractWithBrowser = async (page: PublicPage, signal?: AbortSignal,
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("网页读取桥接未就绪");
-    invocation = await prepareReader(folder, `http://127.0.0.1:${address.port}${path}`, signal);
+    invocation = await prepareReader(folder, `http://127.0.0.1:${address.port}${path}`, signal, traceId);
     const output = await runner(invocation);
     checkSignal(signal);
     const result = z.object({ success: z.literal(true), data: z.object({ content: z.string().min(1), source: z.literal("accept-markdown") }) }).parse(JSON.parse(output));
@@ -79,5 +97,5 @@ export const extractWithBrowser = async (page: PublicPage, signal?: AbortSignal,
   }
 };
 
-export const readWithBrowser = async (url: string, signal?: AbortSignal): Promise<WebPage> =>
-  extractWithBrowser(await fetchPublicPage(url, signal), signal);
+export const readWithBrowser = async (url: string, signal?: AbortSignal, traceId?: string): Promise<WebPage> =>
+  extractWithBrowser(await fetchPublicPage(url, signal), signal, execute, traceId);

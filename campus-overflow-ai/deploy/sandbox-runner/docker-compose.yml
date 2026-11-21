@@ -1,0 +1,34 @@
+# P0-2 容器运行时沙箱：外部命令、浏览器与文件执行的隔离边界。
+# 与 MCP 沙箱不同，这里默认完全断网；需要联网的任务只能走 Agent 受控的公开检索，
+# 不允许在沙箱内直接出站。生产应设置 SANDBOX_RUNTIME=runsc 启用 gVisor。
+name: campus-overflow-sandbox-runner
+
+services:
+  exec:
+    image: ${SANDBOX_IMAGE:-node:24-alpine}
+    runtime: ${SANDBOX_RUNTIME:-runc}
+    command: ["node", "--version"]
+    working_dir: /workspace
+    # 只读根 + 可写临时工作区；不挂载宿主目录、不注入任何凭证。
+    read_only: true
+    user: "65534:65534"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # 完全无网络，连回环也不提供；跨进程通信只能通过标准输入输出。
+    network_mode: "none"
+    ipc: private
+    pids_limit: 128
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1.0
+    ulimits:
+      nofile: 256
+      nproc: 128
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+      - /workspace:size=128m,noexec,nosuid,nodev
+    init: true
+    stop_grace_period: 5s
+    restart: "no"

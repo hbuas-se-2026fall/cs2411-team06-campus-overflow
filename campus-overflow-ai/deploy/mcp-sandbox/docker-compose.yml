@@ -1,4 +1,5 @@
 # MCP 只读工具沙箱示例：非 root、只读根文件系统、无数据库凭证、仅本机端口。
+# 生产侧应设置 MCP_SANDBOX_RUNTIME=runsc 启用 gVisor；默认 runc 仅便于本地验证。
 name: campus-overflow-mcp-sandbox
 
 services:
@@ -6,6 +7,7 @@ services:
     build:
       context: ../../agent
       dockerfile: Dockerfile.sandbox
+    runtime: ${MCP_SANDBOX_RUNTIME:-runc}
     read_only: true
     user: "1000:1000"
     cap_drop:
@@ -14,9 +16,12 @@ services:
       - no-new-privileges:true
     pids_limit: 256
     mem_limit: 512m
+    memswap_limit: 512m
     cpus: 1.0
+    ulimits:
+      nofile: 512
     tmpfs:
-      - /tmp:size=64m,noexec,nosuid
+      - /tmp:size=64m,noexec,nosuid,nodev
     ports:
       - "127.0.0.1:8790:8790"
     environment:

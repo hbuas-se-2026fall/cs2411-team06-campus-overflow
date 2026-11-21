@@ -12,12 +12,19 @@ import {
   type EmbeddingEnvConfig,
 } from "./embedding.js";
 import { RagIndex } from "./index.js";
-import type { EmbeddingProvider } from "./types.js";
+import {
+  createOpenAICompatibleRerankProvider,
+  resolveRerankConfig,
+  type RerankEnvConfig,
+} from "./rerank.js";
+import type { EmbeddingProvider, RerankProvider } from "./types.js";
 
 export interface RagRuntimeDependencies {
   getCatalog: () => KnowledgeCatalog | undefined;
   resolveConfig?: () => EmbeddingEnvConfig | null;
   createEmbedder?: (config: EmbeddingEnvConfig) => EmbeddingProvider;
+  resolveRerank?: () => RerankEnvConfig | null;
+  createReranker?: (config: RerankEnvConfig) => RerankProvider;
   enabled?: () => boolean;
 }
 
@@ -43,6 +50,40 @@ export const createRagRuntime = (dependencies: RagRuntimeDependencies): RagRunti
   const resolveConfig = dependencies.resolveConfig ?? resolveEmbeddingConfig;
   const createEmbedder = dependencies.createEmbedder
     ?? ((config: EmbeddingEnvConfig) => createOpenAICompatibleEmbeddingProvider(config));
+  const resolveRerank = dependencies.resolveRerank ?? resolveRerankConfig;
+  const createReranker = dependencies.createReranker
+    ?? ((config: RerankEnvConfig) => createOpenAICompatibleRerankProvider(config));
+  let rerankResolved = false;
+  let rerankConfig: RerankEnvConfig | null = null;
+
+  // 重排配置无效只降级为“无重排”，不能让整个索引构建失败。
+  const resolveRerankOnce = (): RerankEnvConfig | null => {
+    if (rerankResolved) return rerankConfig;
+    rerankResolved = true;
+    try {
+      rerankConfig = resolveRerank();
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "rag_rerank_config_invalid",
+        reason: sanitizeReason(error),
+      }));
+      rerankConfig = null;
+    }
+    return rerankConfig;
+  };
+
+  const buildReranker = (config: RerankEnvConfig | null): RerankProvider | undefined => {
+    if (!config) return undefined;
+    try {
+      return createReranker(config);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "rag_rerank_config_invalid",
+        reason: sanitizeReason(error),
+      }));
+      return undefined;
+    }
+  };
 
   const getIndex = async (courseId: number): Promise<RagIndex | undefined> => {
     if (!enabled()) return undefined;
@@ -54,7 +95,7 @@ export const createRagRuntime = (dependencies: RagRuntimeDependencies): RagRunti
         const summary = catalog.list([courseId]);
         const config = resolveConfig();
         if (!config) return undefined;
-        return { catalog, summary, config };
+        return { catalog, summary, config, rerank: resolveRerankOnce() };
       } catch (error) {
         console.error(JSON.stringify({
           event: "rag_index_prepare_failed",
@@ -65,8 +106,11 @@ export const createRagRuntime = (dependencies: RagRuntimeDependencies): RagRunti
       }
     })();
     if (!prepared) return undefined;
-    const { catalog, summary, config } = prepared;
-    const cacheKey = `${summary.version}|${config.model}|${config.baseUrl}`;
+    const { catalog, summary, config, rerank } = prepared;
+    const rerankKey = rerank
+      ? `${rerank.model}|${rerank.candidateLimit}|${rerank.minScore}|${rerank.maxTotalChars}`
+      : "off";
+    const cacheKey = `${summary.version}|${config.model}|${config.baseUrl}|rerank:${rerankKey}`;
     const cached = cache.get(courseId);
     if (cached?.key === cacheKey) return cached.index;
 
@@ -77,7 +121,17 @@ export const createRagRuntime = (dependencies: RagRuntimeDependencies): RagRunti
       try {
         const chunks = await collectCatalogChunks(catalog, [courseId]);
         if (chunks.length === 0) return undefined;
-        const index = await RagIndex.build({ chunks, embedder: createEmbedder(config) });
+        const reranker = buildReranker(rerank);
+        const index = await RagIndex.build({
+          chunks,
+          embedder: createEmbedder(config),
+          ...(reranker && rerank ? {
+            reranker,
+            candidateLimit: rerank.candidateLimit,
+            minRerankScore: rerank.minScore,
+            maxTotalChars: rerank.maxTotalChars,
+          } : {}),
+        });
         cache.set(courseId, { key: cacheKey, index });
         return index;
       } catch (error) {
@@ -100,6 +154,8 @@ export const createRagRuntime = (dependencies: RagRuntimeDependencies): RagRunti
     reset: () => {
       cache.clear();
       building.clear();
+      rerankResolved = false;
+      rerankConfig = null;
     },
   };
 };

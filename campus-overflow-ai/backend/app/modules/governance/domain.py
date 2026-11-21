@@ -94,6 +94,9 @@ CASE_ALLOWED_DECISIONS = CASE_EXECUTION_DECISIONS | {CASE_DECISION_SKIP}
 BAN_TEMP_DEFAULT_DAYS = 7
 BAN_TEMP_MAX_DAYS = 30
 
+# 槽位租约重试预算（P0-6）：同一 job 的顶替/重试各消耗 1，归零后不可再用
+SLOT_RETRY_BUDGET = 5
+
 # 工单目标类型：内容三类 + 用户
 CASE_TARGET_QUESTION = "question"
 CASE_TARGET_ANSWER = "answer"
@@ -158,6 +161,24 @@ class RunStateError(DomainError):
 
 class RunConflictError(DomainError):
     """Agent 运行标识已存在，不能覆盖原有记录。"""
+
+    http_status = 409
+
+
+class ChatStreamNotFoundError(DomainError):
+    """聊天流不存在、不属于当前用户或已过期。"""
+
+    http_status = 404
+
+
+class ChatStreamStateError(DomainError):
+    """聊天流已结束或事件序号不连续，不能继续追加。"""
+
+    http_status = 409
+
+
+class ChatStreamEventConflictError(ChatStreamStateError):
+    """同一序号已存在不同内容的事件。"""
 
     http_status = 409
 

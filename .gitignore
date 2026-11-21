@@ -77,11 +77,12 @@ htmlcov/
 *.sqlite3-shm
 
 # ---------- 一次性临时产物 ----------
-# 本地文档、规格、规则、个人笔记与归档只留本地，不随仓库发布
+# 本地文档、规则、个人笔记与归档只留本地；specs/ 与 docs/decisions/ 是权威规格与决策，纳入 Git
 # 注意：已跟踪文件仍需 git rm --cached 才会从远端移除
 /.trae/
-/docs/
-/specs/
+/docs/*
+!/docs/decisions/
+!/docs/decisions/**
 /my_engineer_docs/
 /.workbuddy/
 /_archive/

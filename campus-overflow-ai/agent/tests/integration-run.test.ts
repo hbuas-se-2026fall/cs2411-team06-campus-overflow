@@ -44,6 +44,17 @@ let behavior: BackendBehavior = {};
 let recorded: RecordedRequest[] = [];
 let eventSequence = 0;
 
+interface MockChatStream {
+  request_id: string;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  cancel_requested: boolean;
+  agent_run_id: string | null;
+  trace_id: string | null;
+  expires_at: string;
+  events: Array<{ seq: number; event_type: string; data: string }>;
+}
+let chatStreams = new Map<string, MockChatStream>();
+
 const failEnvelope = (status: number) => ({ code: status, data: null, message: `模拟后端 ${status} 错误` });
 const okEnvelope = (data: unknown) => ({ code: 200, data, message: "ok" });
 
@@ -121,6 +132,56 @@ const server = http.createServer((request, response) => {
         target_type: "answer", target_id: 12, author_id: 1, course_id: 2, title: null, body: "真实原文",
       }));
     }
+    // P0-3 聊天可恢复流：与 governance 内部契约同形，供 Agent 真实 HTTP 往返。
+    const chatMatch = path.match(/^\/internal\/agent\/user\/chat-streams\/([^/]+)(\/events|\/cancel)?$/);
+    if (chatMatch) {
+      const requestId = decodeURIComponent(chatMatch[1] ?? "");
+      const action = chatMatch[2];
+      const stream = chatStreams.get(requestId);
+      const snapshot = (item: MockChatStream, created = false) => okEnvelope({
+        request_id: item.request_id, status: item.status, cancel_requested: item.cancel_requested,
+        agent_run_id: item.agent_run_id, trace_id: item.trace_id, expires_at: item.expires_at, created,
+      });
+      if (request.method === "PUT" && !action) {
+        if (stream) return json(200, snapshot(stream));
+        const createdItem: MockChatStream = {
+          request_id: requestId, status: "running", cancel_requested: false,
+          agent_run_id: (body?.agent_run_id as string | undefined) ?? null,
+          trace_id: (body?.trace_id as string | undefined) ?? null,
+          expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), events: [],
+        };
+        chatStreams.set(requestId, createdItem);
+        return json(200, snapshot(createdItem, true));
+      }
+      if (request.method === "POST" && action === "/events") {
+        if (!stream) return json(404, failEnvelope(404));
+        const seq = body?.seq as number;
+        const eventType = body?.event_type as string;
+        const data = body?.data as string;
+        const duplicate = stream.events.find((event) => event.seq === seq);
+        if (!duplicate) {
+          stream.events.push({ seq, event_type: eventType, data });
+          if (eventType === "done") stream.status = "succeeded";
+          if (eventType === "error") {
+            stream.status = stream.cancel_requested ? "cancelled" : "failed";
+          }
+        }
+        return json(200, okEnvelope({ seq, status: stream.status, duplicate: Boolean(duplicate) }));
+      }
+      if (request.method === "GET" && !action) {
+        if (!stream) return json(404, failEnvelope(404));
+        const after = Number(url.searchParams.get("after") ?? "0");
+        return json(200, okEnvelope({
+          ...snapshot(stream).data as Record<string, unknown>,
+          events: stream.events.filter((event) => event.seq > after),
+        }));
+      }
+      if (request.method === "POST" && action === "/cancel") {
+        if (!stream) return json(404, failEnvelope(404));
+        if (stream.status === "running") stream.cancel_requested = true;
+        return json(200, snapshot(stream));
+      }
+    }
     return json(404, failEnvelope(404));
   });
 });
@@ -184,6 +245,7 @@ describe("跨服务集成：身份 → 计划 → 工具 → 总结 → 审计",
     recorded = [];
     eventSequence = 0;
     behavior = {};
+    chatStreams = new Map();
   });
 
   afterEach(() => { vi.restoreAllMocks(); });
@@ -294,8 +356,11 @@ describe("跨服务集成：身份 → 计划 → 工具 → 总结 → 审计",
     expect(text).not.toContain(SERVICE_TOKEN);
     assertCredentialsOnEveryCall();
 
-    // 计划事件 steps 为空也必须记录，随后直接进入终态
-    const events = recorded.filter((call) => call.path.endsWith("/events"));
+    // 计划事件 steps 为空也必须记录，随后直接进入终态；
+    // 只统计审计运行事件，聊天流自己的 /events 另属可恢复记录。
+    const events = recorded.filter(
+      (call) => /^\/internal\/agent\/user\/runs\/[^/]+\/events$/.test(call.path),
+    );
     expect(events.map((call) => call.body?.event_type)).toEqual(["plan"]);
     expect(events[0]?.body?.steps).toEqual([]);
     expect(recorded.find((call) => call.method === "PATCH")?.body).toMatchObject({ status: "succeeded" });
