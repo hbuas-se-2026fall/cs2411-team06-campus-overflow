@@ -72,4 +72,5 @@
 - 一致性分析：[analyze.md](./analyze.md)
 - 决策记录：[docs/decisions/README.md](../docs/decisions/README.md)
 - 需求流程：[.trae/rules/requirement-process.md](../.trae/rules/requirement-process.md)
+- 需求模板：[requirements/_template.md](./requirements/_template.md)
 - 验证证据：[docs/审查记录/](../docs/审查记录/)

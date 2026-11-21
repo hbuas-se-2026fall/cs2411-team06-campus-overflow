@@ -28,6 +28,7 @@ CampusOverflow AI：面向高校课程场景的智能问答平台。三个服务
 - **修改 spec / plan / tasks 后，进入 implement 前必须重跑一致性分析**（specs/analyze.md）。
 - **tasks.md 严格按 Phase 顺序执行**，每完成一项打勾；失败时回改上游文档，不跳过。当前执行以 `specs/status.md` 与 tasks.md 勾选为准。
 - **一个事实只写一处**：进度只写 `status.md`，决策只写 `docs/decisions/`，规则不追加历史状态。
+- **新需求先走共创协议**：默认按七问 grill 用户，整理成 `specs/requirements/R-XXX-<slug>.md`，确认后才开工；仅用户明确说“跳过七问”的小修可豁免。
 - **快捷命令**：`/spec <任务号>` 等价于 `/speckit.implement <任务号>`，默认上下文为 AGENTS.md、specs/、docs/（按需），收尾动作为勾选 `specs/tasks.md`；细则见 [docs/workflow.md](./docs/workflow.md) "快捷命令 /spec" 一节。
 
 ## 增量开发纪律（implement 阶段必须遵守）
