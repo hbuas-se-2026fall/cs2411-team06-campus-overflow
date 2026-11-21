@@ -12,21 +12,22 @@ CampusOverflow AI：面向高校课程场景的智能问答平台。三个服务
 | 前端 | `campus-overflow-ai/frontend/` | Next.js 16（App Router）+ React 19 + TypeScript 5 + Tailwind CSS 4 + @ai-sdk/react（Agent 流式 UI） | 二期补完中 |
 | Agent 服务 | `campus-overflow-ai/agent/` | TypeScript 5 + Vercel AI SDK 7 + Hono/Nitro + Workflow + Zod v4 + MCP Adapter（Node ≥ 24.0.0，ESM；2026-11-03随agent-browser升级） | 二期实施中，Workflow治理接线仍按WF分期 |
 
-> **当前范围**（2026-11-21，覆盖旧范围注）：一期 T-01~T-10 与二期 T-11~T-13 已完成；T-14~T-17 主体已交付，剩余 M-03/M-04、T-15-E/F/G、T-16-C/D、T-17 N-03~N-07 已在 `specs/tasks.md` 登记，父任务保持未验收；Phase 4（T-18~T-20）仍推迟至第三期；前端 F-C1~F-C5 完成，F-C6 未完成。46e3bf8 同批后端契约接口为正式接口，保留不删。旧 Q-08“本期只做业务后端”表述已被本段取代。
+> **当前范围**：以 [specs/status.md](./specs/status.md) 为唯一进度源。当前为二期收尾 + 部署准备：T-01～T-13 完成，T-14～T-17 主体已交付、剩余子项已登记；F-C6 与 T-18～T-20 未完成。旧 Q-08“本期只做业务后端”已失效。
 > **角色模型**（spec v3）：RBAC 三角色 student / teacher / admin；助教不是独立角色——研究生身份且助教认证通过 → 助教能力位（`require_graduate_assistant`），解锁学生端助教板块（US-20）。
 
-文档与规格在根目录：`docs/`（需求、架构、流程）、`specs/`（constitution/spec/plan/tasks/analyze）、`.trae/rules/`（工程规则）。
+文档与规格：`specs/`（constitution/spec/plan/tasks/status/analyze）、`docs/`（需求、架构、决策、审查记录）、`.trae/rules/`（工程规则与需求流程）。当前状态只看 `specs/status.md`，决策只看 `docs/decisions/`。
 
 **遇事原则**：对需求、架构、接口、流程有任何不清楚的地方，先查 `docs/` 下的相关文档；文档仍无法解答时，直接向用户提问确认，不要自行猜测。
 
 ## 工作流程（规格驱动，必须遵守）
 
-执行路径：`constitution → specify → clarify → plan → tasks → analyze → implement`，详见 [docs/workflow.md](./docs/workflow.md)。
+需求入口与 DoR/DoD 见 [requirement-process.md](./.trae/rules/requirement-process.md)。规格执行路径：`constitution → specify → clarify → plan → tasks → analyze → implement`，详见 [docs/workflow.md](./docs/workflow.md)。
 
 - **spec.md 只写需求（WHAT）**，禁止写入技术实现细节；实现方案只能进 plan.md。
 - **宪法（constitution.md）优先级最高**，与任何文档或代码冲突时以宪法为准。
 - **修改 spec / plan / tasks 后，进入 implement 前必须重跑一致性分析**（specs/analyze.md）。
-- **tasks.md 严格按 Phase 顺序执行**，每完成一项打勾；失败时回改上游文档，不跳过。当前执行以 tasks.md 的最新范围注和勾选状态为准。
+- **tasks.md 严格按 Phase 顺序执行**，每完成一项打勾；失败时回改上游文档，不跳过。当前执行以 `specs/status.md` 与 tasks.md 勾选为准。
+- **一个事实只写一处**：进度只写 `status.md`，决策只写 `docs/decisions/`，规则不追加历史状态。
 - **快捷命令**：`/spec <任务号>` 等价于 `/speckit.implement <任务号>`，默认上下文为 AGENTS.md、specs/、docs/（按需），收尾动作为勾选 `specs/tasks.md`；细则见 [docs/workflow.md](./docs/workflow.md) "快捷命令 /spec" 一节。
 
 ## 增量开发纪律（implement 阶段必须遵守）
