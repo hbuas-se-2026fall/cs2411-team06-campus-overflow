@@ -41,6 +41,7 @@ function fixture(outputs: unknown[], chatTexts = ["已核验的建议"]) {
     searchQuestions: vi.fn().mockResolvedValue([{ id: 9, title: "真实问题", courseId: 2 }]),
     fetchTags: vi.fn().mockResolvedValue([{ id: 7, name: "并发", type: "tech" }]),
     fetchModerationTarget: vi.fn().mockResolvedValue({ targetType: "answer", targetId: 12, authorId: 3, body: "真实原文" }),
+    createPatrolCase: vi.fn().mockResolvedValue({ repeat: false }),
   });
   const model = new MockLanguageModelV4({ doGenerate: generate, doStream: stream });
   const app = createApp({ getModel: () => model, createClient: () => client });

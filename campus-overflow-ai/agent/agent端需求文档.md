@@ -257,11 +257,12 @@ interface McpToolDefinition {
 | /internal/agent/runs | POST | 创建运行记录 | 全部 |
 | /internal/agent/runs/{agent_run_id} | PATCH | 更新运行结果 | 全部 |
 | /internal/agent/tool-calls | POST | 写入工具调用日志 | 全部 |
-| /internal/agent/memory | GET / POST | 读取或写入记忆 | T-14 记忆闭环 |
-| /internal/agent/approvals | POST | 创建人工确认请求 | moderation_scan |
+| /internal/agent/mcp/calls | POST | 写入 MCP 调用审计（脱敏摘要） | MCP 服务 |
+| /internal/agent/sync/questions | GET | 增量同步可见问题 | MCP sync_questions |
+| /internal/agent/approvals | POST | 创建人工确认请求 | moderation_scan / 高风险 MCP |
 | /internal/agent/moderation-cases/{case_id}/decision | PATCH | 更新工单决策（T-16 扩展） | moderation_scan |
 
-> 上表是 T-12 已注册的真实路径；其中 memory、approvals、runs、tool-calls 的完整 Agent 侧持久化闭环分别由 T-14～T-16 完成。问题详情、课程上下文、审核快照等旧草案路径尚未注册。
+> 上表为当前真实路径；个人记忆按 C-07 只保存在浏览器，`/internal/agent/memory` 已随 T-14 M-04 删除。approvals、runs、tool-calls、mcp/calls 的 Agent 侧持久化闭环由 T-14～T-17 完成。问题详情、课程上下文、审核快照等旧草案路径尚未注册。
 
 要求：
 

@@ -124,6 +124,21 @@ export interface WeeklyReportSaveBody {
   agent_run_id: string;
 }
 
+/** 增量同步问题条目（GET /internal/agent/sync/questions，T-17 N-05） */
+export interface SyncQuestionItem {
+  id: number;
+  title: string;
+  course_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SyncQuestionsResult {
+  items: SyncQuestionItem[];
+  next_cursor: number;
+  has_more: boolean;
+}
+
 /** 巡检内容条目（GET /internal/agent/patrol/contents，T-15-B 补充端点） */
 export interface PatrolContentItem {
   target_type: "question" | "answer" | "comment";
@@ -146,6 +161,27 @@ export interface PatrolCaseBody {
 /** 巡检建单响应：data.repeat=true 表示同目标已有未结案工单（幂等跳过） */
 export interface PatrolCaseAck {
   repeat: boolean;
+}
+
+/** 低风险内容打标请求体（POST /internal/agent/patrol/marks，T-15-F；蛇形） */
+export interface PatrolMarkBody {
+  target_type: "question" | "answer" | "comment";
+  target_id: number;
+  risk_level: "low";
+  reason: string;
+  agent_run_id: string;
+}
+
+export interface PatrolMarkAck {
+  id: number;
+  target_type: "question" | "answer" | "comment";
+  target_id: number;
+  risk_level: string;
+  reason: string;
+  agent_run_id: string;
+  trace_id: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export type PatrolScanTargetType = "question" | "answer" | "comment";
@@ -278,6 +314,12 @@ export interface InternalClient {
     traceId: TraceId,
   ): Promise<PatrolContentItem[]>;
   createPatrolCase(body: PatrolCaseBody, traceId: TraceId): Promise<PatrolCaseAck>;
+  /** 增量同步可见问题（T-17 N-05）：id 升序游标，不含正文与作者 */
+  syncQuestions(
+    params: { updatedAfter: string; cursor?: number; limit?: number },
+    traceId: TraceId,
+  ): Promise<SyncQuestionsResult>;
+  createPatrolMark(body: PatrolMarkBody, traceId: TraceId): Promise<PatrolMarkAck>;
   createPatrolScan(
     params: { targetTypes?: PatrolScanTargetType[]; createdBy?: number },
     traceId: TraceId,
@@ -345,6 +387,16 @@ export interface UserInternalClient extends InternalClient {
     traceId: TraceId,
   ): Promise<GovernanceState>;
   createGovernanceRequest(body: GovernanceRequestInput, traceId: TraceId): Promise<GovernanceRequestAck>;
+  /** 高风险动作待确认工单（T-15 / N-07）：仅创建，不执行 */
+  createApproval(body: {
+    action_type: string;
+    risk_level: "low" | "medium" | "high";
+    payload_snapshot: string;
+    target_type?: string;
+    target_id?: number;
+    reason?: string;
+    agent_run_id?: string;
+  }, traceId: TraceId): Promise<{ id: number; status: string }>;
   readApprovalWait(requestId: string, operation: "read" | "resume" | "cancel", traceId: TraceId): Promise<ApprovalWait>;
   fetchCatalogTags(traceId: TraceId): Promise<TrustedKnowledgeTag[]>;
   fetchTrustedTags(courseId: number, traceId: TraceId): Promise<Array<TrustedKnowledgeTag & { tag_id: number; name: string }>>;
@@ -369,9 +421,23 @@ export interface UserInternalClient extends InternalClient {
   cancelChatStream(requestId: string, traceId: TraceId): Promise<ChatStreamSnapshot>;
 }
 
+/** MCP 调用审计写入体（T-17 N-04）：只含脱敏摘要与 trace。 */
+export interface McpCallAuditBody {
+  client_name: string;
+  tool_name: string;
+  status: "succeeded" | "failed" | "denied" | "unregistered" | "rejected";
+  args_summary: string;
+  result_summary?: string | null;
+  error_summary?: string | null;
+  duration_ms: number;
+  trace_id: string;
+}
+
 /** P0-4 沙箱审计只走服务凭证：系统级事件不携带用户身份。 */
 export interface SandboxAuditRecorder {
   recordSandboxEvent(event: SandboxAuditEvent, traceId: TraceId): Promise<{ id: number }>;
+  /** MCP 调用审计（T-17 N-04）：只提交脱敏摘要，不提交凭证与原文 */
+  recordMcpCall(body: McpCallAuditBody, traceId: TraceId): Promise<{ id: number; status: string }>;
 }
 
 const buildUrl = (baseUrl: string, path: string, query: Record<string, string | undefined>): string => {
@@ -439,6 +505,29 @@ const PatrolContentsSchema = z.object({
   total: z.number().int().nonnegative(),
 });
 const PatrolCaseAckSchema = z.object({ repeat: z.boolean() });
+/** 增量同步响应（T-17 N-05） */
+const SyncQuestionsSchema = z.object({
+  items: z.array(z.object({
+    id: z.number().int().positive(),
+    title: z.string(),
+    course_id: z.number().int().positive(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })),
+  next_cursor: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+});
+const PatrolMarkAckSchema = z.object({
+  id: z.number().int().positive(),
+  target_type: z.enum(["question", "answer", "comment"]),
+  target_id: z.number().int().positive(),
+  risk_level: z.string(),
+  reason: z.string(),
+  agent_run_id: z.string(),
+  trace_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
 const PatrolScanJobSchema = z.object({
   id: z.number().int().positive(),
   status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
@@ -583,6 +672,10 @@ export type ChatStreamEventAck = z.infer<typeof ChatStreamEventAckSchema>;
 
 /** 沙箱审计回执：只关心是否落库，不信任后端回显的其余字段。 */
 const SandboxEventAckSchema = z.object({ id: z.number().int().positive() });
+/** MCP 调用审计写入响应（T-17 N-04） */
+const McpCallAckSchema = z.object({ id: z.number().int().positive(), status: z.string() });
+/** 审批工单创建响应（T-17 N-07：高风险外部 MCP 工具） */
+const ApprovalTicketSchema = z.object({ id: z.number().int().positive(), status: z.string() });
 
 const createRequest = (config: InternalClientConfig) => {
   return async <T>(
@@ -772,6 +865,9 @@ export const createInternalClient = (
       }
       return data;
     },
+    createApproval: async (body, traceId) => request(
+      "/internal/agent/approvals", {}, traceId, ApprovalTicketSchema, { method: "POST", body },
+    ),
     searchCourses: async (params, traceId) => {
       const data = await request(
         `${prefix}/courses/search`,
@@ -855,6 +951,19 @@ export const createInternalClient = (
     },
     createPatrolCase: async (body, traceId) =>
       request("/internal/agent/patrol/cases", {}, traceId, PatrolCaseAckSchema, {
+        method: "POST", body,
+      }),
+    syncQuestions: async (params, traceId) => request(
+      "/internal/agent/sync/questions",
+      {
+        updated_after: params.updatedAfter,
+        cursor: params.cursor?.toString(),
+        limit: params.limit?.toString(),
+      },
+      traceId, SyncQuestionsSchema,
+    ),
+    createPatrolMark: async (body, traceId) =>
+      request("/internal/agent/patrol/marks", {}, traceId, PatrolMarkAckSchema, {
         method: "POST", body,
       }),
     createPatrolScan: async (params, traceId) =>
@@ -1029,6 +1138,10 @@ export const createInternalClient = (
     recordSandboxEvent: (event, traceId) => request(
       "/internal/agent/sandbox/events", {}, traceId, SandboxEventAckSchema,
       { method: "POST", body: event },
+    ),
+    recordMcpCall: (body, traceId) => request(
+      "/internal/agent/mcp/calls", {}, traceId, McpCallAckSchema,
+      { method: "POST", body },
     ),
   };
 };

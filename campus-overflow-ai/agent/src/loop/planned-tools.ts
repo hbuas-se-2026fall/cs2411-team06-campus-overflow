@@ -6,6 +6,7 @@ import { buildPlanPrompt, buildPlanningSystem, buildToolListJson } from "../prom
 import { createToolRegistry, type ToolRegistry } from "../tools/registry.js";
 import { executePlan, PlanExecutionError } from "./plan-executor.js";
 import { generatePlan } from "./plan-generator.js";
+import { readPlanParallelEnabled } from "../runtime-config.js";
 import { COMMON_READ_TOOLS, roleActionNames } from "../auth/role-capabilities.js";
 
 const READ_TOOLS = [...COMMON_READ_TOOLS, ...roleActionNames("admin")];
@@ -85,6 +86,8 @@ export const runPlannedTools = async (
     audit: context.audit,
     registry, input, toolContext: { ...context.runContext, source: kind === "moderation_scan" ? "patrol" : "chat" }, requiredTools,
     assertArgs: (tool, args) => assertTaskScope(kind, input, tool, args),
+    // 全局开关来自后端配置；读取失败按默认关闭（ADR-010）
+    parallel: await readPlanParallelEnabled(context.runContext.traceId),
   });
   for (const step of plan.steps) if (execution.stepResults.has(step.stepId)) {
     context.runContext.evidence.record(step.toolName, execution.stepResults.get(step.stepId));

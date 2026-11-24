@@ -4,6 +4,8 @@ import { Hono } from "hono";
 import { userRequestContext, type AgentEnvironment } from "./auth/request-context.js";
 import { defaultInternalClient } from "./internal-client.js";
 import { registerChatRoute } from "./routes/chat.js";
+import { registerMemoryRoutes } from "./routes/memory.js";
+import { registerUpstreamMcpRoutes } from "./routes/mcp-upstream.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { registerPatrolConsolidationRoute } from "./routes/patrol-consolidation.js";
 import { registerPatrolFullScanRoutes } from "./routes/patrol-full-scan.js";
@@ -55,6 +57,8 @@ export const createApp = (deps: AppDependencies = {}): AgentApp => {
   registerSharedContextRoutes(app);
   registerSnapshotAdminRoutes(app);
   registerChatRoute(app, { ...deps, pool });
+  registerMemoryRoutes(app, deps);
+  registerUpstreamMcpRoutes(app);
   registerTaskRoutes(app, { ...deps, pool });
   registerPoolRoutes(app, pool);
   return app;

@@ -4,6 +4,7 @@ import { SSEStreamingApi } from "hono/streaming";
 
 import { createApp } from "../src/app";
 import { createInternalClient } from "../src/internal-client";
+import { setRuntimeConfigFetchForTests } from "../src/runtime-config";
 import { auditFetch } from "./helpers/audit-fetch";
 import { chatStreamStub } from "./helpers/chat-stream-stub";
 import { approvedReview } from "./helpers/review-response";
@@ -37,12 +38,15 @@ function fixture() {
     if (path.endsWith("/principal")) return envelope({ user_id: 3, role: "student", status: "active",
       identity_type: "undergraduate", assistant_cert_status: "none" });
     if (path.endsWith("/tags")) return read(init?.signal);
+    if (path.endsWith("/runtime-config")) return envelope({ plan_parallel_enabled: false });
     if (init?.method === "PATCH") { const result = await finish(); if (result) return result; }
     if (path.endsWith("/events") && JSON.parse(String(init?.body)).event_type === "step_started") await beforeStep();
     const result = await serveAudit(input, init);
     if (!result) throw new Error("禁止非白名单路径");
     return result;
   });
+  // 防止运行配置读取绕过桩 fetch 访问真实网络（假定时器下会卡住）
+  setRuntimeConfigFetchForTests(fetchImpl);
   const modelSignals: Array<AbortSignal | undefined> = [];
   let count = 0;
   const generate = vi.fn(async (options: Parameters<MockLanguageModelV4["doGenerate"]>[0]) => {
@@ -83,7 +87,7 @@ function fixture() {
     request, cancel, patches, errorLog, get clientSignal() { return clientSignal; } };
 }
 
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); setRuntimeConfigFetchForTests(undefined); });
 
 describe("运行超时与取消", () => {
   it("规划等待中取消不重试，迟到计划不能执行工具", async () => {

@@ -1,9 +1,10 @@
 // P0-3 可恢复流：请求幂等、断线续接、取消与持久化失败边界。
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 
 import { createApp } from "../src/app";
 import { InternalApiError, type UserInternalClient } from "../src/internal-client";
+import { setRuntimeConfigFetchForTests } from "../src/runtime-config";
 import { auditStub } from "./helpers/audit-stub";
 import { chatStreamStub } from "./helpers/chat-stream-stub";
 import { approvedReview } from "./helpers/review-response";
@@ -16,6 +17,10 @@ const headers = { authorization: "Bearer user", "x-trace-id": "trace-resume" };
 const flush = async (rounds = 800) => { for (let i = 0; i < rounds; i++) await Promise.resolve(); };
 
 function fixture(overrides: { complete?: boolean; appendError?: boolean } = {}) {
+  // 运行配置是服务级只读调用，桩掉避免测试访问真实网络
+  setRuntimeConfigFetchForTests(async () => Response.json({
+    code: 200, data: { plan_parallel_enabled: false }, message: "ok",
+  }));
   const complete = overrides.complete ?? true;
   const stream = vi.fn(async () => ({ stream: complete
     ? simulateReadableStream({ chunks: [
@@ -53,6 +58,8 @@ function fixture(overrides: { complete?: boolean; appendError?: boolean } = {}) 
 }
 
 describe("P0-3 聊天可恢复流", () => {
+  afterEach(() => { setRuntimeConfigFetchForTests(undefined); });
+
   it("重复 POST 使用同一运行，不重复调用模型并回放已有事件", async () => {
     const f = fixture({ complete: false });
     const first = await f.chat();

@@ -74,6 +74,35 @@ const listTagsTool = (client: InternalClient): McpToolDefinition => ({
   },
 });
 
+const syncQuestionsTool = (client: InternalClient): McpToolDefinition => ({
+  name: "sync_questions",
+  description: "按更新时间增量同步站内可见问题（id 升序游标），用于外部系统定期同步",
+  scope: "read",
+  inputSchema: {
+    type: "object",
+    properties: {
+      updated_after: { type: "string", format: "date-time", description: "只返回该时间后更新的问题（ISO 8601）" },
+      cursor: { type: "integer", minimum: 0, default: 0, description: "上次返回的 next_cursor" },
+      limit: { type: "integer", minimum: 1, maximum: 200, default: 100, description: "单批返回上限" },
+    },
+    required: ["updated_after"],
+    additionalProperties: false,
+  },
+  validate: zodValidator(z.object({
+    updated_after: z.string().min(10).max(40).refine(value => !Number.isNaN(Date.parse(value)),
+      "updated_after 需为 ISO 8601 时间"),
+    cursor: z.number().int().min(0).default(0),
+    limit: z.number().int().min(1).max(200).default(100),
+  })),
+  execute: async (args, ctx) => {
+    const parsed = args as { updated_after: string; cursor: number; limit: number };
+    return client.syncQuestions(
+      { updatedAfter: parsed.updated_after, cursor: parsed.cursor, limit: parsed.limit },
+      asTraceId(ctx.traceId),
+    );
+  },
+});
+
 /** 装配全部只读工具；幂等可重复调用（重复注册即抛错，调用方持有独立注册表） */
 export const ensureReadOnlyMcpTools = (
   registry: McpToolRegistry, client: InternalClient,
@@ -82,6 +111,7 @@ export const ensureReadOnlyMcpTools = (
     searchQuestionsTool(client),
     searchCoursesTool(client),
     listTagsTool(client),
+    syncQuestionsTool(client),
   ]) {
     registry.registerTool(tool);
   }

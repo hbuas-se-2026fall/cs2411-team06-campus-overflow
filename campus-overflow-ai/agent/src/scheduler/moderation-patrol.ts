@@ -126,7 +126,21 @@ export const evaluatePatrolContent = async (
       maxRetries: 0,
     });
     if (verdict.riskLevel === "low" || !verdict.shouldEscalate) {
-      // 低风险/不建议复核：仅运行级留痕（US-13"低风险打标"的调度侧形态）
+      if (verdict.riskLevel === "low") {
+        // 低风险内容级打标（T-15-F）：只记标记，不建单、不影响可见性
+        await executeThroughGateway({
+          name: "createPatrolMark", risk: "low",
+          input: {
+            target_type: content.target_type, target_id: content.target_id,
+            risk_level: "low", reason: verdict.reason, agent_run_id: runId,
+          },
+          hooks, context: { source: "patrol", traceId: trace },
+          execute: () => client.createPatrolMark({
+            target_type: content.target_type, target_id: content.target_id,
+            risk_level: "low", reason: verdict.reason, agent_run_id: runId,
+          }, asTraceId(trace)),
+        });
+      }
       return "skipped";
     }
     const input = {

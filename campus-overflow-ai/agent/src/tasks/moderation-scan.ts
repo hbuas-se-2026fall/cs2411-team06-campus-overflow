@@ -46,7 +46,6 @@ export const moderationScanHandler: TaskHandler<ModerationScanInput> = {
   taskType: "moderation_scan",
   inputSchema: ModerationScanInputSchema,
   run: async (input, context) => {
-    // TODO(T-15): shouldEscalate 为真时经 POST /internal/agent/approvals 创建待确认工单
     let content: ModerationContentResult | undefined;
     const { internalClient: client, toolRegistry } = context;
     if (client && toolRegistry) {
@@ -66,6 +65,18 @@ export const moderationScanHandler: TaskHandler<ModerationScanInput> = {
       prompt: buildPrompt(input, content),
     });
     // 无客户端或站内正文不可读：结论必须标注依据为未核验摘录
-    return content ? output : markUnverifiedExcerpt(output);
+    const result = content ? output : markUnverifiedExcerpt(output);
+    // C-06：只创建待确认工单，不做任何处置；快照优先用已核验正文，否则为请求方摘录
+    if (result.shouldEscalate && client) {
+      await client.createPatrolCase({
+        target_type: input.targetType,
+        target_id: input.targetId,
+        risk_level: result.riskLevel,
+        reason: result.reason,
+        snapshot: (content?.body ?? input.contentExcerpt).slice(0, 500),
+        agent_run_id: context.runContext.agentRunId,
+      }, context.runContext.traceId);
+    }
+    return result;
   },
 };

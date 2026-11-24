@@ -132,6 +132,14 @@ const server = http.createServer((request, response) => {
         target_type: "answer", target_id: 12, author_id: 1, course_id: 2, title: null, body: "真实原文",
       }));
     }
+    if (request.method === "POST" && path === "/internal/agent/patrol/cases") {
+      // C-06：升级判定只创建待确认工单
+      return json(200, okEnvelope({ repeat: false }));
+    }
+    if (request.method === "GET" && path === "/internal/agent/runtime-config") {
+      // SA-07C：服务级只读开关，不携带用户身份
+      return json(200, okEnvelope({ plan_parallel_enabled: false }));
+    }
     // P0-3 聊天可恢复流：与 governance 内部契约同形，供 Agent 真实 HTTP 往返。
     const chatMatch = path.match(/^\/internal\/agent\/user\/chat-streams\/([^/]+)(\/events|\/cancel)?$/);
     if (chatMatch) {
@@ -209,12 +217,17 @@ const searchPlan = planOf([{ stepId: "s1", toolName: "searchQuestions", args: { 
 const draftOutput = { title: "线程讲解", bodyMarkdown: "参考[真实问题](/questions/9)。" };
 const draftInput = { topic: "线程", courseId: 2 };
 
+const SERVICE_ONLY_PATHS = new Set(["/internal/agent/runtime-config"]);
+
 /** 全部后端请求必须同时携带服务 token、用户 Bearer 与同一 trace id（双凭证 + C-08） */
 const assertCredentialsOnEveryCall = () => {
   expect(recorded).not.toHaveLength(0);
   for (const call of recorded) {
     expect(call.serviceToken).toBe(SERVICE_TOKEN);
-    expect(call.authorization).toBe(`Bearer ${USER_JWT}`);
+    // SA-07C 运行配置是服务级只读接口，按设计不带用户身份
+    if (!SERVICE_ONLY_PATHS.has(call.path)) {
+      expect(call.authorization, `${call.method} ${call.path}`).toBe(`Bearer ${USER_JWT}`);
+    }
     expect(call.traceId).toBe(TRACE_ID);
   }
 };
@@ -271,6 +284,7 @@ describe("跨服务集成：身份 → 计划 → 工具 → 总结 → 审计",
       "GET /internal/agent/principal",
       "POST /internal/agent/user/runs",
       "POST /internal/agent/user/runs/<run>/events",
+      "GET /internal/agent/runtime-config",
       "POST /internal/agent/user/runs/<run>/events",
       "GET /internal/agent/user/questions/search",
       "POST /internal/agent/user/runs/<run>/events",
