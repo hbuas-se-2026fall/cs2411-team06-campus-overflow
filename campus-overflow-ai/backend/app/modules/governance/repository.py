@@ -4,7 +4,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import and_, case, delete, desc, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.governance import domain
@@ -12,7 +12,6 @@ from app.modules.governance.models import (
     AgentChatStream,
     AgentChatStreamEvent,
     AgentExperience,
-    AgentMemory,
     AgentRun,
     AgentRunEvent,
     AgentSandboxEvent,
@@ -25,11 +24,14 @@ from app.modules.governance.models import (
     CourseTagSource,
     GovernanceApprovalRequest,
     GovernanceExecutionJob,
+    McpCallLog,
     ModerationCase,
+    ModerationMark,
     PatrolNote,
     PatrolScanJob,
     PatrolWorkflowScan,
     PatrolWorkflowTask,
+    SystemSetting,
     ToolCallLog,
 )
 from app.modules.governance.schemas import (
@@ -39,12 +41,14 @@ from app.modules.governance.schemas import (
     ChatStreamEventAck,
     ChatStreamEventItem,
     ChatStreamOut,
-    MemoryItemOut,
+    McpCallOut,
     ModerationCaseOut,
+    PatrolMarkOut,
     PatrolNoteOut,
     RunEventOut,
     SandboxEventCreateRequest,
     SandboxEventOut,
+    SystemSettingOut,
     ToolCallOut,
 )
 from app.modules.governance.schemas_executions import GovernanceApprovalRecord, GovernanceJobRecord
@@ -453,46 +457,6 @@ def create_tool_call(
     db.add(log)
     db.flush()
     return ToolCallOut.model_validate(log)
-
-
-# ---------- 持久化记忆（agent_memory） ----------
-
-
-def list_memories(
-    db: Session, user_id: int, course_id: int | None, memory_types: list[str] | None
-) -> list[MemoryItemOut]:
-    """读取用户生效记忆（is_enabled=true），按类型/课程可选过滤，最近优先。"""
-    query = db.query(AgentMemory).filter(
-        AgentMemory.user_id == user_id, AgentMemory.is_enabled.is_(True)
-    )
-    if course_id is not None:
-        query = query.filter(AgentMemory.course_id == course_id)
-    if memory_types:
-        query = query.filter(AgentMemory.memory_type.in_(memory_types))
-    rows = (
-        query.order_by(desc(AgentMemory.created_at), desc(AgentMemory.id))
-        .limit(domain.MEMORY_LIST_LIMIT)
-        .all()
-    )
-    return [MemoryItemOut.model_validate(row) for row in rows]
-
-
-def create_memory(
-    db: Session, user_id: int, memory_type: str, content: str,
-    course_id: int | None, source_run_id: str | None,
-) -> MemoryItemOut:
-    """写入一条记忆（敏感信息过滤在 service 层，本层只落库）。"""
-    item = AgentMemory(
-        user_id=user_id,
-        memory_type=memory_type,
-        content=content,
-        course_id=course_id,
-        source_run_id=source_run_id,
-        is_enabled=True,
-    )
-    db.add(item)
-    db.flush()
-    return MemoryItemOut.model_validate(item)
 
 
 # ---------- 审批工单（moderation_cases，C-06：只建工单不执行） ----------
@@ -1283,3 +1247,112 @@ def insert_sandbox_event(
     db.add(row)
     db.flush()
     return SandboxEventOut.model_validate(row)
+
+
+# ---------- 低风险内容打标（T-15-F / US-13） ----------
+
+
+def upsert_moderation_mark(
+    db: Session, target_type: str, target_id: int, risk_level: str,
+    reason: str, agent_run_id: str, trace_id: str,
+) -> PatrolMarkOut:
+    """按目标唯一写入/覆盖低风险标记；只 flush，提交由 service 负责。"""
+    row = (
+        db.query(ModerationMark)
+        .filter(
+            ModerationMark.target_type == target_type,
+            ModerationMark.target_id == target_id,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        row = ModerationMark(
+            target_type=target_type, target_id=target_id,
+            agent_run_id=agent_run_id, trace_id=trace_id,
+        )
+        db.add(row)
+    row.risk_level = risk_level
+    row.reason = reason
+    row.agent_run_id = agent_run_id
+    row.trace_id = trace_id
+    db.flush()
+    db.refresh(row)
+    return PatrolMarkOut.model_validate(row)
+
+
+def list_moderation_marks(db: Session, limit: int = 100) -> list[PatrolMarkOut]:
+    """最近低风险打标（管理员只读）；仅元数据，不含正文。"""
+    rows = (
+        db.query(ModerationMark)
+        .order_by(ModerationMark.updated_at.desc(), ModerationMark.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [PatrolMarkOut.model_validate(row) for row in rows]
+
+
+# ---------- MCP 调用审计（T-17 N-04 / US-18） ----------
+
+
+def insert_mcp_call(
+    db: Session, *, client_name: str, tool_name: str, status: str,
+    args_summary: str, result_summary: str | None, error_summary: str | None,
+    duration_ms: int, trace_id: str,
+) -> McpCallOut:
+    """追加 MCP 调用审计；只 flush，提交由 service 负责。"""
+    row = McpCallLog(
+        client_name=client_name, tool_name=tool_name, status=status,
+        args_summary=args_summary, result_summary=result_summary,
+        error_summary=error_summary, duration_ms=duration_ms, trace_id=trace_id,
+    )
+    db.add(row)
+    db.flush()
+    db.refresh(row)
+    return McpCallOut.model_validate(row)
+
+
+def list_mcp_calls(
+    db: Session, page: int = 1, page_size: int = 20,
+    client_name: str | None = None, tool_name: str | None = None,
+    status: str | None = None,
+) -> tuple[list[McpCallOut], int]:
+    """管理员分页检索 MCP 调用审计，可按客户端/工具/状态筛选。"""
+    query = db.query(McpCallLog)
+    if client_name:
+        query = query.filter(McpCallLog.client_name == client_name)
+    if tool_name:
+        query = query.filter(McpCallLog.tool_name == tool_name)
+    if status:
+        query = query.filter(McpCallLog.status == status)
+    total = query.count()
+    rows = (
+        query.order_by(McpCallLog.created_at.desc(), McpCallLog.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return [McpCallOut.model_validate(row) for row in rows], total
+
+
+# ---------- 系统运行开关（SA-07C / ADR-010） ----------
+
+
+def get_system_setting(db: Session, key: str) -> SystemSettingOut | None:
+    """按 key 读取设置；不存在表示使用代码默认值。"""
+    row = db.get(SystemSetting, key)
+    return SystemSettingOut.model_validate(row) if row is not None else None
+
+
+def save_system_setting(
+    db: Session, key: str, value: str, actor_id: int | None,
+) -> SystemSettingOut:
+    """写入或覆盖设置；本层只 flush，提交由 service 负责。"""
+    row = db.get(SystemSetting, key)
+    if row is None:
+        row = SystemSetting(key=key, value=value, updated_by=actor_id)
+        db.add(row)
+    else:
+        row.value, row.updated_by = value, actor_id
+    db.flush()
+    db.refresh(row)
+    return SystemSettingOut.model_validate(row)

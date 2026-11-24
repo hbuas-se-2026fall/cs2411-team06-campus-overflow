@@ -74,19 +74,22 @@ ALLOWED_CASE_TRANSITIONS = {
     CASE_STATUS_REJECTED: set(),  # 终态
 }
 
-# 决策值白名单（2026-10-12 校正到 US-14 词汇；2026-10-24 T-15-D 开放 warn/ban_temp）：
+# 决策值白名单（2026-10-12 校正到 US-14 词汇；2026-10-24 T-15-D 开放 warn/ban_temp；
+# 2026-11-24 T-15-E 开放 edit）：
 # skip 为放弃/安全自终止（不执行处置）；hide/delete 作用于内容；ban/ban_temp 作用于人；
-# warn 为警告（仅通知与审计，不改内容与账号状态）。
-# edit（要求修改流程未建）仍不开放；resolve（与 qa"采纳解决"语义冲突的假处置值）保持移除。
+# warn 为警告（仅通知与审计，不改内容与账号状态）；
+# edit 为要求修改（仅问题/回答，置 needs_revision 并通知作者，作者编辑后清除）。
+# resolve（与 qa"采纳解决"语义冲突的假处置值）保持移除。
 CASE_DECISION_HIDE = "hide"
 CASE_DECISION_DELETE = "delete"
 CASE_DECISION_BAN = "ban"
 CASE_DECISION_BAN_TEMP = "ban_temp"
 CASE_DECISION_WARN = "warn"
+CASE_DECISION_EDIT = "edit"
 CASE_DECISION_SKIP = "skip"
 CASE_EXECUTION_DECISIONS = {
     CASE_DECISION_HIDE, CASE_DECISION_DELETE, CASE_DECISION_BAN,
-    CASE_DECISION_BAN_TEMP, CASE_DECISION_WARN,
+    CASE_DECISION_BAN_TEMP, CASE_DECISION_WARN, CASE_DECISION_EDIT,
 }
 CASE_ALLOWED_DECISIONS = CASE_EXECUTION_DECISIONS | {CASE_DECISION_SKIP}
 
@@ -104,25 +107,6 @@ CASE_TARGET_COMMENT = "comment"
 CASE_TARGET_USER = "user"
 CASE_CONTENT_TARGETS = {CASE_TARGET_QUESTION, CASE_TARGET_ANSWER, CASE_TARGET_COMMENT}
 CASE_ALLOWED_TARGETS = CASE_CONTENT_TARGETS | {CASE_TARGET_USER}
-
-# ---------- 持久化记忆（agent_memory / US-17，plan §4 三类） ----------
-
-MEMORY_PREFERENCE = "preference"
-MEMORY_COURSE_CONTEXT = "course_context"
-MEMORY_TASK_EXPERIENCE = "task_experience"
-MEMORY_TYPES = {MEMORY_PREFERENCE, MEMORY_COURSE_CONTEXT, MEMORY_TASK_EXPERIENCE}
-
-# 任务类型 → 该任务相关的记忆类型（plan §5"按任务类型过滤"的映射；
-# 映射口径可随审查调整，未登记的任务类型不按类型过滤）
-TASK_MEMORY_RELEVANCE: dict[str, set[str]] = {
-    "suggest_tags": {MEMORY_COURSE_CONTEXT},
-    "similar_questions": {MEMORY_COURSE_CONTEXT},
-    "moderation_scan": {MEMORY_TASK_EXPERIENCE},
-    "doc_draft": {MEMORY_COURSE_CONTEXT, MEMORY_TASK_EXPERIENCE},
-}
-
-# 记忆读取单次上限（内部检索场景，候选有界即可）
-MEMORY_LIST_LIMIT = 50
 
 # ---------- 审批工单（moderation_cases / US-13/US-14，C-06） ----------
 
@@ -181,18 +165,6 @@ class ChatStreamEventConflictError(ChatStreamStateError):
     """同一序号已存在不同内容的事件。"""
 
     http_status = 409
-
-
-class InvalidMemoryTypeError(DomainError):
-    """记忆类型不合法（仅限偏好 / 课程上下文 / 任务经验三类）。"""
-
-    http_status = 400
-
-
-class MemorySensitiveError(DomainError):
-    """记忆内容包含敏感信息，写入被拒绝。"""
-
-    http_status = 400
 
 
 class ReportSensitiveError(DomainError):
@@ -418,12 +390,6 @@ def ensure_run_transition(current: str, target: str) -> None:
         raise RunStateError()
 
 
-def ensure_valid_memory_type(memory_type: str) -> None:
-    """不变量：记忆类型必须在三类白名单内。"""
-    if memory_type not in MEMORY_TYPES:
-        raise InvalidMemoryTypeError()
-
-
 def ensure_valid_approval(action_type: str, risk_level: str) -> None:
     """不变量：审批动作类型与风险等级必须在白名单内（拒绝 Agent 侧任意枚举）。"""
     if action_type not in APPROVAL_ACTION_TYPES or risk_level not in APPROVAL_RISK_LEVELS:
@@ -439,15 +405,15 @@ def ensure_case_transition(current: str, target: str) -> None:
 
 
 def ensure_decision_allowed(decision: str) -> None:
-    """不变量：决策值必须在白名单内（resolve/warn/edit 本期一律 400）。"""
+    """不变量：决策值必须在白名单内（resolve 等假处置值一律 400）。"""
     if decision not in CASE_ALLOWED_DECISIONS:
         raise CaseDecisionError()
 
 
 def ensure_decision_matches_target(decision: str, target_type: str) -> None:
-    """不变量：处置动作与目标类型必须匹配——ban/ban_temp 仅对人，hide/delete 仅对内容。
+    """不变量：处置动作与目标类型必须匹配——ban/ban_temp/warn 仅对人，hide/delete/edit 仅对内容。
 
-    warn 仅对人（对内容警告无意义，内容违规应走 hide/delete）；skip 不参与匹配。
+    edit 额外只支持问题/回答（评论没有作者编辑流程）；skip 不参与匹配。
     """
     if decision == CASE_DECISION_SKIP:
         return
@@ -456,3 +422,5 @@ def ensure_decision_matches_target(decision: str, target_type: str) -> None:
             raise CaseDecisionError("封禁与警告动作只能作用于用户类工单")
     elif target_type not in CASE_CONTENT_TARGETS:
         raise CaseDecisionError("内容处置动作只能作用于问题 / 回答 / 评论类工单")
+    elif decision == CASE_DECISION_EDIT and target_type == CASE_TARGET_COMMENT:
+        raise CaseDecisionError("评论不支持要求修改，请改用隐藏或删除")

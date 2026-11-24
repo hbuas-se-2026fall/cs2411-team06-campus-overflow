@@ -62,14 +62,16 @@ class GovernanceRequestCreate(BaseModel):
     expected_version: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_type: Literal["question", "answer", "comment", "user"]
     target_id: int = Field(gt=0, strict=True)
-    action: Literal["hide", "delete", "ban", "ban_temp", "warn"]
+    action: Literal["hide", "delete", "edit", "ban", "ban_temp", "warn"]
     reason: str = Field(min_length=1, max_length=500)
     duration_days: int | None = Field(None, ge=1, le=30, strict=True)
 
     @model_validator(mode="after")
     def check_action(self) -> Self:
-        if (self.action in {"hide", "delete"}) == (self.target_type == "user"):
+        if (self.action in {"hide", "delete", "edit"}) == (self.target_type == "user"):
             raise ValueError("动作与目标类型不匹配")
+        if self.action == "edit" and self.target_type == "comment":
+            raise ValueError("评论不支持要求修改")
         if self.action != "ban_temp" and self.duration_days is not None:
             raise ValueError("只有限时封禁可以指定期限")
         if self.action == "ban_temp" and self.duration_days is None:
@@ -90,13 +92,15 @@ class GovernanceDryRunCreate(BaseModel):
     expected_version: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_type: Literal["question", "answer", "comment", "user"]
     target_id: int = Field(gt=0, strict=True)
-    action: Literal["hide", "delete", "ban", "ban_temp", "warn"]
+    action: Literal["hide", "delete", "edit", "ban", "ban_temp", "warn"]
     duration_days: int | None = Field(None, ge=1, le=30, strict=True)
 
     @model_validator(mode="after")
     def check_action(self) -> Self:
-        if (self.action in {"hide", "delete"}) == (self.target_type == "user"):
+        if (self.action in {"hide", "delete", "edit"}) == (self.target_type == "user"):
             raise ValueError("动作与目标类型不匹配")
+        if self.action == "edit" and self.target_type == "comment":
+            raise ValueError("评论不支持要求修改")
         if self.action != "ban_temp" and self.duration_days is not None:
             raise ValueError("只有限时封禁可以指定期限")
         if self.action == "ban_temp" and self.duration_days is None:
@@ -137,41 +141,6 @@ class GovernanceRequestOut(BaseModel):
     duration_days: int | None = None
     status: str
     repeat: bool
-
-
-# ---------- 记忆（US-17 / C-07 / X-06） ----------
-
-
-class MemoryWriteRequest(BaseModel):
-    """写入记忆请求（plan §5：userId / memoryType / content / sourceRunId）。
-
-    course_id 为可选课程上下文（plan §6 存储键），敏感内容过滤在 service 层。
-    """
-
-    user_id: int = Field(..., description="记忆归属用户")
-    memory_type: str = Field(
-        ..., min_length=1, max_length=20,
-        description="preference / course_context / task_experience",
-    )
-    content: str = Field(..., min_length=1, description="记忆正文（写入前做敏感信息过滤）")
-    course_id: int | None = Field(None, description="可选关联课程")
-    source_run_id: str | None = Field(None, max_length=64, description="来源 Agent 运行标识")
-
-
-class MemoryItemOut(BaseModel):
-    """记忆条目出参。"""
-
-    id: int
-    user_id: int
-    memory_type: str
-    content: str
-    course_id: int | None = None
-    source_run_id: str | None = None
-    is_enabled: bool
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 # ---------- Agent 运行（US-18 / C-08） ----------
@@ -507,7 +476,7 @@ class DecisionUpdateRequest(BaseModel):
         ...,
         min_length=1,
         max_length=100,
-        description="处置决策：skip / hide / delete / ban（US-14）",
+        description="处置决策：skip / hide / delete / edit / ban / ban_temp / warn（US-14）",
     )
     decision_source: str | None = Field(
         None,
@@ -543,10 +512,10 @@ class ReportSaveRequest(BaseModel):
 
 
 class CaseResolveRequest(BaseModel):
-    """管理员处置审核工单请求（双环决策白名单 hide/delete/ban/ban_temp/warn/skip）。"""
+    """管理员处置审核工单请求（双环决策白名单 hide/delete/edit/ban/ban_temp/warn/skip）。"""
 
     decision: str = Field(
-        ..., description="处置动作：hide / delete / ban / ban_temp / warn / skip"
+        ..., description="处置动作：hide / delete / edit / ban / ban_temp / warn / skip"
     )
     manager_feedback: str = Field(
         ..., min_length=1, max_length=2000, description="管理员处置说明（留痕）"
@@ -619,6 +588,70 @@ class RunTraceDetail(BaseModel):
     events: list[RunEventOut]
     tool_calls: list[ToolCallOut]
     related_cases: list[ModerationCaseOut]
+
+
+class PatrolMarkCreateRequest(BaseModel):
+    """低风险内容打标（T-15-F）：同目标只保留最新一条，不改变内容状态。"""
+
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+    target_type: Literal["question", "answer", "comment"] = Field(
+        ..., description="目标内容类型"
+    )
+    target_id: int = Field(..., ge=1, description="目标内容 ID")
+    risk_level: Literal["low"] = Field("low", description="低风险标记")
+    reason: str = Field("", max_length=200, description="简短理由（不复述正文）")
+    agent_run_id: str = Field(..., min_length=1, max_length=64, description="巡检运行标识")
+
+
+class PatrolMarkOut(BaseModel):
+    """低风险打标出参。"""
+
+    id: int
+    target_type: str
+    target_id: int
+    risk_level: str
+    reason: str
+    agent_run_id: str
+    trace_id: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class McpCallCreateRequest(BaseModel):
+    """MCP 调用审计写入（T-17 N-04）：只接受脱敏摘要，凭证与原文不得入库。"""
+
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+    client_name: str = Field(..., min_length=1, max_length=80, description="外部客户端名")
+    tool_name: str = Field(..., min_length=1, max_length=120, description="工具名")
+    status: Literal["succeeded", "failed", "denied", "unregistered", "rejected"] = Field(
+        ..., description="调用结果分类"
+    )
+    args_summary: str = Field("", max_length=200, description="参数脱敏摘要")
+    result_summary: str | None = Field(None, max_length=200, description="结果脱敏摘要")
+    error_summary: str | None = Field(None, max_length=200, description="失败脱敏摘要")
+    duration_ms: int = Field(0, ge=0, le=600_000, description="耗时毫秒")
+    trace_id: str = Field("", max_length=64, description="调用 trace")
+
+
+class McpCallOut(BaseModel):
+    """MCP 调用审计出参（管理员只读）。"""
+
+    id: int
+    client_name: str
+    tool_name: str
+    status: str
+    args_summary: str
+    result_summary: str | None
+    error_summary: str | None
+    duration_ms: int
+    trace_id: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class PatrolCaseCreateRequest(BaseModel):
@@ -743,3 +776,31 @@ class SlotWaitOut(BaseModel):
     status: Literal["waiting", "granted", "expired"]
     position: int | None = None
     lease: SlotLeaseOut | None = None
+
+
+# ---------- 系统运行开关（SA-07C / ADR-010） ----------
+
+
+class SystemSettingOut(BaseModel):
+    """设置表条目（仓储层出参；value 为字符串化值）。"""
+
+    key: str
+    value: str
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PlanParallelSettingUpdate(BaseModel):
+    """管理员切换计划内并行；缺省与关闭时保持串行。"""
+
+    model_config = {"extra": "forbid"}
+
+    plan_parallel_enabled: bool
+
+
+class PlanParallelSettingOut(BaseModel):
+    """计划内并行开关出参；updated_at 为空表示从未写入、按默认关闭处理。"""
+
+    plan_parallel_enabled: bool
+    updated_at: datetime | None = None

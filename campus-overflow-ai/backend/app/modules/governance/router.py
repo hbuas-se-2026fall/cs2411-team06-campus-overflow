@@ -12,11 +12,12 @@ from app.core.permissions import (
 )
 from app.core.response import ok
 from app.db.session import get_db
-from app.modules.governance import service_admin
+from app.modules.governance import service_admin, service_internal, service_settings
 from app.modules.governance.schemas import (
     AppealCreateRequest,
     AppealResolveRequest,
     CaseResolveRequest,
+    PlanParallelSettingUpdate,
 )
 
 router = APIRouter(prefix="/api/governance", tags=["治理（审批中心）"])
@@ -131,3 +132,58 @@ def get_run_trace(
     """管理员：单运行完整调用链（运行 + 计划/步骤事件 + 工具调用 + 关联工单）。"""
     detail = service_admin.get_run_trace(db, agent_run_id)
     return ok(detail.model_dump())
+
+
+# ---------- 系统运行开关（SA-07C / ADR-010） ----------
+
+
+@router.get("/moderation/marks")
+def list_moderation_marks(
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+    limit: int = Query(100, ge=1, le=200),
+) -> dict:
+    """管理员：最近低风险内容打标（T-15-F），仅元数据不含正文。"""
+    items = service_internal.list_moderation_marks(db, limit)
+    return ok({"items": [item.model_dump(mode="json") for item in items],
+               "total": len(items)})
+
+
+@router.get("/mcp/calls")
+def list_mcp_calls(
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    client_name: str | None = Query(None, max_length=80, description="外部客户端名"),
+    tool_name: str | None = Query(None, max_length=120, description="工具名"),
+    status: str | None = Query(None, max_length=20, description="调用结果分类"),
+) -> dict:
+    """管理员：MCP 调用审计分页检索（T-17 N-04），仅脱敏摘要。"""
+    items, total = service_internal.list_mcp_calls(
+        db, page, page_size, client_name, tool_name, status,
+    )
+    return ok({
+        "items": [item.model_dump(mode="json") for item in items],
+        "total": total, "page": page, "page_size": page_size,
+    })
+
+
+@router.get("/settings/plan-parallel")
+def get_plan_parallel_setting(
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：读取计划内并行开关（默认关闭）。"""
+    return ok(service_settings.get_plan_parallel(db).model_dump(mode="json"))
+
+
+@router.put("/settings/plan-parallel")
+def update_plan_parallel_setting(
+    req: PlanParallelSettingUpdate,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：切换计划内并行开关；Agent 下次配置刷新后生效。"""
+    setting = service_settings.update_plan_parallel(db, req.plan_parallel_enabled, admin.id)
+    return ok(setting.model_dump(mode="json"), "设置已更新")

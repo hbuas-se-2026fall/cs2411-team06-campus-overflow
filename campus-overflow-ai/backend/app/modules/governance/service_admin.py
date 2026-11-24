@@ -162,6 +162,8 @@ def resolve_appeal(
                     qa_service.moderation_restore_visible(db, case.target_type, case.target_id)
                 elif case.resolution == domain.CASE_DECISION_DELETE:
                     qa_service.moderation_restore_deleted(db, case.target_type, case.target_id)
+                elif case.resolution == domain.CASE_DECISION_EDIT:
+                    qa_service.moderation_clear_revision(db, case.target_type, case.target_id)
             repository.save_appeal_resolution(
                 db, appeal_id, status="accepted",
                 resolution_note=resolution_note, resolved_by=admin_id,

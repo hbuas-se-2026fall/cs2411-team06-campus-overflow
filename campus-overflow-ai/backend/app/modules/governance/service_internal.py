@@ -24,9 +24,12 @@ from app.modules.governance.schemas import (
     ChatStreamEventCreateRequest,
     ChatStreamOut,
     ChatStreamReadOut,
-    MemoryItemOut,
+    McpCallCreateRequest,
+    McpCallOut,
     ModerationCaseOut,
     PatrolFeedbackItem,
+    PatrolMarkCreateRequest,
+    PatrolMarkOut,
     PatrolNoteCreateItem,
     PatrolNoteOut,
     ReportSaveRequest,
@@ -221,41 +224,6 @@ def record_run_event(
     return result
 
 
-def write_memory(
-    db: Session, user_id: int, memory_type: str, content: str,
-    course_id: int | None, source_run_id: str | None, trace_id: str,
-) -> MemoryItemOut:
-    """写入记忆：用户必须存在；类型白名单；敏感内容拒绝并留拦截日志（不含原文）。"""
-    identity_service.get_by_id(db, user_id)  # 不存在 → 404
-    domain.ensure_valid_memory_type(memory_type)
-    if domain.is_sensitive_content(content):
-        # 拦截日志只留元信息，不落内容原文（C-07）
-        action_logger.warning(
-            "agent_memory_intercepted user_id=%s trace_id=%s reason=sensitive_keyword",
-            user_id, trace_id,
-        )
-        raise domain.MemorySensitiveError()
-    item = repository.create_memory(db, user_id, memory_type, content, course_id, source_run_id)
-    db.commit()
-    return item
-
-
-def list_memories(
-    db: Session, user_id: int, task_type: str | None,
-    memory_type: str | None, course_id: int | None,
-) -> list[MemoryItemOut]:
-    """读取相关记忆：用户/课程/类型过滤（plan §5）；task_type 经领域映射取相关类型。"""
-    identity_service.get_by_id(db, user_id)  # 不存在 → 404
-    if memory_type:
-        domain.ensure_valid_memory_type(memory_type)
-        memory_types = [memory_type]
-    elif task_type:
-        memory_types = sorted(domain.TASK_MEMORY_RELEVANCE.get(task_type, set()))
-    else:
-        memory_types = None
-    return repository.list_memories(db, user_id, course_id, memory_types)
-
-
 # ---------- 审批工单（US-13 / US-14 / C-06：只建工单，绝不执行） ----------
 
 
@@ -398,6 +366,8 @@ def apply_moderation_action(
     elif decision == domain.CASE_DECISION_WARN:
         reason = f"治理工单 #{case.id} 警告：{case.reason}"[:BAN_REASON_MAX_LEN]
         identity_service.moderation_warn_user(db, target_id, reason, admin_id)
+    elif decision == domain.CASE_DECISION_EDIT:
+        qa_service.moderation_require_revision(db, target_type, target_id)
     else:  # pragma: no cover - 白名单已在入口保证
         raise domain.CaseDecisionError("不支持的处置动作")
 
@@ -627,6 +597,62 @@ def create_patrol_case(
         case.id, target_type, target_id, risk_level, trace_id,
     )
     return case
+
+
+def mark_patrol_content(
+    db: Session, req: PatrolMarkCreateRequest, trace_id: str,
+) -> PatrolMarkOut:
+    """低风险内容打标（T-15-F）：仅可见内容可打标，同目标覆盖最新评估。
+
+    只写标记表，不修改内容行，因此不影响可见性与作者编辑时间。
+    """
+    if qa_service.probe_moderation_target(db, req.target_type, req.target_id) != "ready":
+        raise domain.CaseTargetNotReadyError("目标内容不可见或已处置，跳过打标")
+    mark = repository.upsert_moderation_mark(
+        db, req.target_type, req.target_id, req.risk_level,
+        req.reason, req.agent_run_id, trace_id,
+    )
+    db.commit()
+    action_logger.info(
+        "patrol_mark_saved target=%s/%s risk=%s trace_id=%s",
+        req.target_type, req.target_id, req.risk_level, trace_id,
+    )
+    return mark
+
+
+def list_moderation_marks(db: Session, limit: int = 100) -> list[PatrolMarkOut]:
+    """管理员只读：最近低风险打标列表。"""
+    return repository.list_moderation_marks(db, limit)
+
+
+# ---------- MCP 调用审计（T-17 N-04 / US-18） ----------
+
+
+def record_mcp_call(
+    db: Session, req: McpCallCreateRequest, trace_id: str,
+) -> McpCallOut:
+    """追加 MCP 调用审计；只存脱敏摘要，不记录凭证与原始参数。"""
+    record = repository.insert_mcp_call(
+        db, client_name=req.client_name, tool_name=req.tool_name, status=req.status,
+        args_summary=req.args_summary, result_summary=req.result_summary,
+        error_summary=req.error_summary, duration_ms=req.duration_ms,
+        trace_id=req.trace_id or trace_id,
+    )
+    db.commit()
+    action_logger.info(
+        "mcp_call_recorded client=%s tool=%s status=%s trace_id=%s",
+        req.client_name, req.tool_name, req.status, req.trace_id or trace_id,
+    )
+    return record
+
+
+def list_mcp_calls(
+    db: Session, page: int = 1, page_size: int = 20,
+    client_name: str | None = None, tool_name: str | None = None,
+    status: str | None = None,
+) -> tuple[list[McpCallOut], int]:
+    """管理员分页检索 MCP 调用审计。"""
+    return repository.list_mcp_calls(db, page, page_size, client_name, tool_name, status)
 
 
 # ---------- 夜间离线整理（N-1/N-2） ----------

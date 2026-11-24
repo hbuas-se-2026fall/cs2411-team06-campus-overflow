@@ -206,35 +206,6 @@ class ToolCallLog(Base):
     )
 
 
-class AgentMemory(Base):
-    """Agent 持久化记忆（US-17/C-07）：用户偏好 / 课程上下文 / 任务经验三类。
-
-    写入前经 service 敏感信息过滤（X-06）；用户可禁用（is_enabled）或删除
-    影响自己的记忆（管理接口随 T-14）。course_id 为软引用（不设 FK，
-    同 ModerationCase.target_id 的跨模块快照语义）。
-    """
-
-    __tablename__ = "agent_memory"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id"), nullable=False, index=True
-    )
-    # 类型：preference / course_context / task_experience（plan §4 三类）
-    memory_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    # 课程上下文可选（plan §6 存储键 user_id + memory_type + course_id? + source_run_id）
-    course_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    source_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-
 class CourseTagSource(Base):
     """教师/教材显式维护的课程词表，不自动信任旧 custom 标签。"""
 
@@ -579,3 +550,77 @@ class AgentSlotWaiter(Base):
     enqueued_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     granted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SystemSetting(Base):
+    """系统运行开关（SA-07C / ADR-010）：当前只有计划内并行开关。
+
+    值为字符串化布尔（"true"/"false"），缺省行不存在表示关闭；
+    仅管理员可写，Agent 通过 /internal/agent/runtime-config 只读获取。
+    """
+
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ModerationMark(Base):
+    """低风险内容打标（T-15-F / US-13）：巡检评估为低风险时按内容留痕。
+
+    同目标只保留最新一条（唯一约束），不改变内容可见性与编辑时间；
+    Agent 经 /internal/agent/patrol/marks 写入，管理员列表只读。
+    """
+
+    __tablename__ = "moderation_marks"
+    __table_args__ = (
+        UniqueConstraint("target_type", "target_id", name="uq_moderation_mark_target"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    risk_level: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="low", server_default="low"
+    )
+    reason: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    agent_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class McpCallLog(Base):
+    """MCP 外部调用审计（T-17 N-04 / US-18）：只存脱敏摘要，不存参数与结果原文。
+
+    服务 token 写入，管理员只读检索；客户端凭证不落库。
+    """
+
+    __tablename__ = "mcp_call_logs"
+    __table_args__ = (
+        Index("ix_mcp_call_logs_created_at", "created_at"),
+        Index("ix_mcp_call_logs_trace_id", "trace_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    args_summary: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    result_summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )

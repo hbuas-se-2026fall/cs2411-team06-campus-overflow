@@ -4,6 +4,7 @@
 # 分层基线：本层只收参调 service_internal，不 import models。
 import secrets
 import uuid
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import (
@@ -33,6 +34,7 @@ from app.modules.governance import (
     service_external,
     service_internal,
     service_scan,
+    service_settings,
     service_waits,
 )
 from app.modules.governance.schemas import (
@@ -46,9 +48,10 @@ from app.modules.governance.schemas import (
     GovernanceDryRunCreate,
     GovernanceRequestCreate,
     GovernanceTargetStateResponse,
-    MemoryWriteRequest,
+    McpCallCreateRequest,
     ModerationTargetResponse,
     PatrolCaseCreateRequest,
+    PatrolMarkCreateRequest,
     PatrolNoteCreateRequest,
     ReportSaveRequest,
     RunCreateRequest,
@@ -69,6 +72,7 @@ from app.modules.governance.schemas_scan import (
     PatrolScanHeartbeatRequest,
     PatrolScanProgressRequest,
 )
+from app.modules.qa import service as qa_service
 
 router = APIRouter(prefix="/internal/agent", tags=["Agent 内部接口"])
 
@@ -242,31 +246,35 @@ DecisionAuth = Annotated[
 ]
 
 
-@router.get("/memory")
-def list_memory(
-    db: DbSession,
-    trace_id: ServiceAuth,
-    user_id: Annotated[int, Query(description="记忆归属用户")],
-    task_type: Annotated[str | None, Query(max_length=50)] = None,
-    memory_type: Annotated[str | None, Query(max_length=20)] = None,
-    course_id: Annotated[int | None, Query()] = None,
-) -> dict:
-    """读取相关记忆（plan §5）：按用户 / 任务类型 / 课程过滤（US-17 / C-07）。"""
-    items = service_internal.list_memories(db, user_id, task_type, memory_type, course_id)
-    return ok({"items": [i.model_dump() for i in items], "total": len(items)})
+@router.get("/runtime-config")
+def get_runtime_config(db: DbSession, trace_id: ServiceAuth) -> dict:
+    """Agent 只读运行配置（SA-07C / ADR-010）：当前仅计划内并行开关。"""
+    return ok(service_settings.get_plan_parallel(db).model_dump(mode="json"))
 
 
-@router.post("/memory")
-def write_memory(
-    req: MemoryWriteRequest,
+@router.post("/mcp/calls")
+def record_mcp_call(req: McpCallCreateRequest, db: DbSession, trace_id: ServiceAuth) -> dict:
+    """MCP 外部调用审计写入（T-17 N-04）：只接受脱敏摘要。"""
+    record = service_internal.record_mcp_call(db, req, trace_id)
+    return ok(record.model_dump(mode="json"), "MCP 调用已记录")
+
+
+@router.get("/sync/questions")
+def sync_questions(
     db: DbSession,
     trace_id: ServiceAuth,
+    updated_after: datetime = Query(..., description="只返回该时间后更新的问题"),
+    cursor: int = Query(0, ge=0, description="上次返回的 next_cursor"),
+    limit: int = Query(100, ge=1, le=200),
 ) -> dict:
-    """写入记忆：敏感信息过滤与审计在 service 层（US-17 / C-07 / X-06）。"""
-    item = service_internal.write_memory(
-        db, req.user_id, req.memory_type, req.content, req.course_id, req.source_run_id, trace_id
-    )
-    return ok(item.model_dump(), "记忆写入成功")
+    """增量同步可见问题（T-17 N-05）：id 升序游标，排除软删与隐藏。"""
+    items = qa_service.list_questions_for_sync(db, updated_after, cursor, limit)
+    next_cursor = items[-1].id if items else cursor
+    return ok({
+        "items": [item.model_dump(mode="json") for item in items],
+        "next_cursor": next_cursor,
+        "has_more": len(items) == limit,
+    })
 
 
 @router.post("/approvals")
@@ -536,6 +544,15 @@ def list_patrol_feedback(
         "total": len(items),
         "days": days,
     })
+
+
+@router.post("/patrol/marks")
+def create_patrol_mark(
+    req: PatrolMarkCreateRequest, db: DbSession, trace_id: ServiceAuth
+) -> dict:
+    """低风险内容打标（T-15-F）：按目标覆盖最新评估，不改变内容状态。"""
+    mark = service_internal.mark_patrol_content(db, req, trace_id)
+    return ok(mark.model_dump(mode="json"), "已记录低风险标记")
 
 
 @router.post("/patrol/notes")

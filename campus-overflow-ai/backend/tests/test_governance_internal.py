@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import hash_password
 from app.modules.courses.models import Course
-from app.modules.governance.models import AgentMemory, AgentRun, ModerationCase
+from app.modules.governance.models import AgentRun, ModerationCase
 from app.modules.identity.models import User, UserStatusAudit
 from app.modules.qa.models import Answer, Comment, Question, QuestionTag, Tag
 
@@ -77,7 +77,7 @@ def _setup_course_with_question(client: TestClient, db: Session, code: str) -> d
 
 def test_missing_token_rejected_401(client: TestClient, db_session: Session) -> None:
     """未带 X-Service-Token 一律 401（完成判定：未带凭证调用被拒绝）。"""
-    resp = client.get("/internal/agent/memory", params={"user_id": 1})
+    resp = client.get("/internal/agent/runtime-config")
     assert resp.status_code == 401
     assert resp.json()["code"] == 401
 
@@ -85,7 +85,7 @@ def test_missing_token_rejected_401(client: TestClient, db_session: Session) -> 
 def test_wrong_token_rejected_401(client: TestClient, db_session: Session) -> None:
     """token 错误一律 401。"""
     resp = client.get(
-        "/internal/agent/memory", params={"user_id": 1},
+        "/internal/agent/runtime-config",
         headers={"X-Service-Token": "bad-token"},
     )
     assert resp.status_code == 401
@@ -171,80 +171,6 @@ def test_run_lifecycle_state_machine_and_tool_calls(
     ).status_code == 404
     assert client.patch(
         "/internal/agent/runs/no-such-run", json={"status": "failed"}, headers=AUTH
-    ).status_code == 404
-
-
-# ---------- 持久化记忆（US-17 / X-06） ----------
-
-
-def test_memory_write_read_and_sensitive_blocked(
-    client: TestClient, db_session: Session
-) -> None:
-    """写记忆 → 读记忆；敏感内容被拒并零落库；非法类型 400；未知用户 404。"""
-    user = _create_user(db_session, "mem_u1")
-    headers = {**AUTH, "X-Trace-Id": "trace-mem-001"}
-
-    ok1 = client.post(
-        "/internal/agent/memory",
-        json={"user_id": user.id, "memory_type": "preference",
-              "content": "偏好简短的要点式回答", "source_run_id": "run-001"},
-        headers=headers,
-    )
-    assert ok1.status_code == 200
-    ok2 = client.post(
-        "/internal/agent/memory",
-        json={"user_id": user.id, "memory_type": "course_context",
-              "content": "正在修读计网课程，关注 TCP 章节", "course_id": 1,
-              "source_run_id": "run-001"},
-        headers=headers,
-    )
-    assert ok2.status_code == 200
-
-    # 读取：按任务类型过滤（suggest_tags → course_context）+ 课程过滤
-    filtered = client.get(
-        "/internal/agent/memory",
-        params={"user_id": user.id, "task_type": "suggest_tags", "course_id": 1},
-        headers=headers,
-    ).json()["data"]
-    assert filtered["total"] == 1
-    assert filtered["items"][0]["memory_type"] == "course_context"
-
-    # 不带过滤：全部生效记忆
-    all_items = client.get(
-        "/internal/agent/memory", params={"user_id": user.id}, headers=headers
-    ).json()["data"]
-    assert all_items["total"] == 2
-
-    # 敏感内容（密码类关键词）写入被拒且零落库（X-06）
-    blocked = client.post(
-        "/internal/agent/memory",
-        json={"user_id": user.id, "memory_type": "task_experience",
-              "content": "用户的密码是123456"},
-        headers=headers,
-    )
-    assert blocked.status_code == 400
-    blocked_en = client.post(
-        "/internal/agent/memory",
-        json={"user_id": user.id, "memory_type": "task_experience",
-              "content": "store the api_key here"},
-        headers=headers,
-    )
-    assert blocked_en.status_code == 400
-    remain = (
-        db_session.query(AgentMemory)
-        .filter(AgentMemory.user_id == user.id, AgentMemory.memory_type == "task_experience")
-        .count()
-    )
-    assert remain == 0
-
-    # 非法记忆类型 400；未知用户 404
-    assert client.post(
-        "/internal/agent/memory",
-        json={"user_id": user.id, "memory_type": "secret_notes", "content": "x"},
-        headers=headers,
-    ).status_code == 400
-    assert client.get(
-        "/internal/agent/memory", params={"user_id": 999999}, headers=headers
     ).status_code == 404
 
 
@@ -908,14 +834,14 @@ def test_pending_skip_with_manager_directed_source_still_rejected(
     assert case.decision_source is None
 
 
-# ---------- 白名单词汇校正：resolve/warn/edit 退出，ban 仅对人 ----------
+# ---------- 白名单词汇校正：resolve 退出，warn 仅对人 ----------
 
 
-@pytest.mark.parametrize("bad_decision", ["resolve", "warn", "edit"])
+@pytest.mark.parametrize("bad_decision", ["resolve", "warn"])
 def test_retired_decision_values_rejected_400(
     client: TestClient, db_session: Session, bad_decision: str
 ) -> None:
-    """resolve（假处置）/warn（通知未交付）/edit（流程未建）一律 400，不留假成功入口。"""
+    """resolve（假处置）与 warn 作用于内容一律 400，不留假成功入口。"""
     case = _create_moderation_case(db_session, status="agent_proposed")
     headers, _ = _admin_jwt_headers(client, db_session, username=f"admin_{bad_decision}")
     resp = client.patch(

@@ -332,6 +332,16 @@ class RecentQuestionContent(BaseModel):
     created_at: datetime
 
 
+class SyncQuestionItem(BaseModel):
+    """增量同步问题条目（T-17 N-05）：只含对外同步的最小字段，不含正文与作者。"""
+
+    id: int
+    title: str
+    course_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class PatrolContentItem(BaseModel):
     """全站巡检内容条目（US-13 静默检测，T-15-B）：问题/回答/评论统一形态。
 
