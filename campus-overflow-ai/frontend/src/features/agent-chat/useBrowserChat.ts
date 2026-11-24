@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { AgentChatError, sendAgentChat } from "@/api/agent-chat";
-import { MEMORY_CHANGED_EVENT, MEMORY_KEY_PREFIX } from "@/shared/lib/browser-memory";
+import { requestMemorySuggestions } from "@/api/agent-memory";
+import {
+  applySuggestedMemoryEntries,
+  isMemoryAutoUpdateEnabled,
+  MEMORY_CHANGED_EVENT,
+  MEMORY_KEY_PREFIX,
+} from "@/shared/lib/browser-memory";
 import { createBrowserSession, readBrowserSessions, saveBrowserSessions, type BrowserSession, type SessionMessage } from "./browser-sessions";
 
 function useChatCancellation(userId: number, setSending: Dispatch<SetStateAction<boolean>>) {
@@ -61,6 +67,7 @@ export function useBrowserChat(userId: number) {
   const [activeId, setActiveId] = useState(sessions[0].id);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
   const { controllerRef, generationRef, cancel } = useChatCancellation(userId, setSending);
   const active = sessions.find(item => item.id === activeId) ?? sessions[0];
   usePersistSessions(userId, sessions, setError);
@@ -86,13 +93,16 @@ export function useBrowserChat(userId: number) {
     controllerRef.current = abort;
     const isCurrent = () => generationRef.current === currentGeneration && !abort.signal.aborted;
     setError(null);
+    setMemoryNotice(null);
     setSending(true);
     setSessions(previous => previous.map(item => item.id === active.id ? {
       ...item, title: item.messages.length ? item.title : message.slice(0, 36),
       messages: [...item.messages, { role: "user" as const, text: message }, { role: "assistant" as const, text: "" }].slice(-100),
     } : item));
+    let answerText = "";
     try {
       const result = await sendAgentChat(message, { onDelta: text => {
+        answerText += text;
         if (!isCurrent()) return;
         updateMessages(active.id, previous => {
           const next = [...previous];
@@ -104,6 +114,17 @@ export function useBrowserChat(userId: number) {
         learningContext: learningContext ? { ...learningContext,
           ...(learningContext.trusted_tag_ids?.length ? { learning_event_id: crypto.randomUUID() } : {}) } : undefined });
       if (!result.finishReason) throw new AgentChatError("回复异常结束，请重试");
+      // M-03：回答完成后按账号开关请求 AI 记忆候选并写入浏览器；
+      // 失败静默忽略，不影响已完成的回答。
+      if (answerText && isMemoryAutoUpdateEnabled(userId)) {
+        const updates = await requestMemorySuggestions(userId, message, answerText, abort.signal);
+        if (updates.length > 0 && isCurrent()) {
+          const { added } = applySuggestedMemoryEntries(userId, updates);
+          if (added.length > 0) {
+            setMemoryNotice(`已根据本次对话更新 ${added.length} 条个人记忆，可在个人中心查看或关闭自动更新。`);
+          }
+        }
+      }
     } catch (caught) {
       if (!isCurrent()) return;
       setError(caught instanceof AgentChatError ? caught.message : "AI 助手暂不可用，请稍后重试");
@@ -112,5 +133,5 @@ export function useBrowserChat(userId: number) {
       if (isCurrent()) { setSending(false); controllerRef.current = null; }
     }
   };
-  return { sessions, active, sending, error, send, newSession, selectSession, clearSession };
+  return { sessions, active, sending, error, memoryNotice, send, newSession, selectSession, clearSession };
 }

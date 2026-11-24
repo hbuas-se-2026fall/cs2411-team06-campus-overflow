@@ -6,10 +6,13 @@ import {
   MEMORY_CONTENT_MAX_LEN,
   MEMORY_MAX_ENTRIES,
   addMemoryEntry,
+  applySuggestedMemoryEntries,
   buildMemoryContext,
   clearMemoryEntries,
+  isMemoryAutoUpdateEnabled,
   listMemoryEntries,
   removeMemoryEntry,
+  setMemoryAutoUpdateEnabled,
 } from "./browser-memory";
 
 beforeEach(() => {
@@ -95,5 +98,39 @@ describe("browser-memory 注入助手", () => {
     const context = buildMemoryContext(11);
     expect(context).toHaveLength(20);
     expect(context[0]).toBe("记忆内容 24"); // 最新在前
+  });
+});
+
+describe("browser-memory AI 自动更新（M-03）", () => {
+  it("自动更新开关按账号隔离，默认开启", () => {
+    expect(isMemoryAutoUpdateEnabled(1)).toBe(true);
+    setMemoryAutoUpdateEnabled(1, false);
+    expect(isMemoryAutoUpdateEnabled(1)).toBe(false);
+    expect(isMemoryAutoUpdateEnabled(2)).toBe(true);
+  });
+
+  it("建议写入复用敏感过滤与去重，且只广播一次变更", () => {
+    const events: number[] = [];
+    const listener = (event: Event) => {
+      events.push((event as CustomEvent<{ userId: number }>).detail.userId);
+    };
+    window.addEventListener("co-memory-changed", listener);
+    addMemoryEntry(12, "偏好先看示例");
+
+    const result = applySuggestedMemoryEntries(12, [
+      "偏好中文讲解", "我的密码是 123456", "偏好中文讲解", "偏好先看示例",
+    ]);
+    window.removeEventListener("co-memory-changed", listener);
+    expect(result.added).toEqual(["偏好中文讲解"]);
+    expect(result.entries.map((entry) => entry.content).sort())
+      .toEqual(["偏好中文讲解", "偏好先看示例"]);
+    // 手动新增 1 次 + 建议批量 1 次；批量内部不逐条广播
+    expect(events).toEqual([12, 12]);
+  });
+
+  it("全部候选被过滤时不写入、不广播", () => {
+    const result = applySuggestedMemoryEntries(13, ["token=abc", "  "]);
+    expect(result.added).toEqual([]);
+    expect(listMemoryEntries(13)).toEqual([]);
   });
 });

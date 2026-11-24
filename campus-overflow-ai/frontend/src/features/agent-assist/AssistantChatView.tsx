@@ -10,10 +10,25 @@ import { listMemoryEntries } from "@/shared/lib/browser-memory";
 import { useSessionStore } from "@/shared/stores/session-store";
 import { useBrowserChat } from "@/features/agent-chat/useBrowserChat";
 import { useServerChat } from "@/features/agent-chat/useServerChat";
+import type { SessionMessage } from "@/features/agent-chat/browser-sessions";
 import { ServerSessionImport } from "@/features/agent-chat/ServerSessionImport";
 import { LearningContextPicker, type LearningContext } from "@/features/agent-chat/LearningContextPicker";
 
 const MESSAGE_MAX = 2000;
+
+/** 浏览器会话与服务端会话共用的聊天视图契约（记忆通知仅浏览器会话提供） */
+interface ChatFlow {
+  sessions: Array<{ id: string; title: string; messages: SessionMessage[] }>;
+  active: { id: string; title: string; messages: SessionMessage[] };
+  sending: boolean;
+  error: string | null;
+  memoryNotice?: string | null;
+  send: (message: string, learningContext?: { course_id?: number; trusted_tag_ids?: number[] }) => Promise<unknown>;
+  newSession: () => void | Promise<void>;
+  selectSession: (id: string) => void;
+  clearSession: () => void | Promise<void>;
+  deleteSession?: () => Promise<void>;
+}
 
 const subscribeHydration = () => () => undefined;
 
@@ -31,8 +46,8 @@ function BrowserChatWindow({ userId }: { userId: number }) {
 function ServerChatWindow({ userId }: { userId: number }) {
   return <ChatWindow userId={userId} flow={useServerChat(userId)} />;
 }
-function ChatWindow({ userId, flow }: { userId: number; flow: ReturnType<typeof useBrowserChat> & { deleteSession?: () => Promise<void> } }) {
-  const { sessions, active, sending, error, send, newSession, selectSession, clearSession } = flow;
+function ChatWindow({ userId, flow }: { userId: number; flow: ChatFlow }) {
+  const { sessions, active, sending, error, memoryNotice, send, newSession, selectSession, clearSession } = flow;
   const messages = active.messages;
   const [draft, setDraft] = useState("");
   const [learningContext, setLearningContext] = useState<LearningContext>({});
@@ -104,6 +119,9 @@ function ChatWindow({ userId, flow }: { userId: number; flow: ReturnType<typeof 
 
       {error !== null ? (
         <p className="text-[13px] text-red-600" role="alert">{error}</p>
+      ) : null}
+      {memoryNotice ? (
+        <p className="text-[12px] text-ink-subtle" role="status">{memoryNotice}</p>
       ) : null}
 
       <div className="flex gap-2">
