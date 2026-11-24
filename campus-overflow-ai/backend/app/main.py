@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.core.maintenance import ReadOnlyMaintenanceMiddleware
+from app.core.otel import OtelTraceMiddleware
 from app.core.response import ok
 from app.modules.courses.router import courses_router
 from app.modules.discovery.router import router as discovery_router
@@ -43,6 +44,9 @@ app.add_middleware(
 
 # 维护读模式（S2）：夜间快照构建期间拦截业务写请求，只读问答与浏览保持可用
 app.add_middleware(ReadOnlyMaintenanceMiddleware)
+
+# 追踪导出（T-16-C）：仅当设置 OTEL_EXPORTER_OTLP_ENDPOINT 时启用，默认零开销
+app.add_middleware(OtelTraceMiddleware)
 
 # 全局异常处理：统一 { code, data, message }，422 归一 400
 register_exception_handlers(app)

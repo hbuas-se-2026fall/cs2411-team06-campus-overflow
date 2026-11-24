@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     maintenance_read_only_start: str = "01:00"
     maintenance_read_only_end: str = "05:00"
 
+    # 运行记录保留策略（T-16-D）：早于保留天数的已结束运行由运维脚本归档后清理
+    agent_run_retention_days: int = 90
+    agent_run_archive_dir: str = ""
+
     # JWT 认证配置
     jwt_secret: str = "dev-jwt-secret-change-in-production"
     jwt_algorithm: str = "HS256"
