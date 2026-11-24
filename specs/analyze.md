@@ -18,6 +18,8 @@
 
 结论：本轮本地实现与测试可收口；真实 MySQL 迁移、真实外部 MCP Server 联调、真实模型与多实例容量明确不在本轮，保持未验收。
 
+补充（T-16-C/D 收口）：OTLP/HTTP 导出默认关闭且失败隔离，运行记录归档先落盘后删除、running 保留，均符合 C-08 与“观测不阻塞业务”；采集器地址、采样率与真实 MySQL 定时调度仍归部署验收。
+
 ## 2026-11-19 子 Agent 池设计变更复核（设计阶段，未实施）
 
 用户确认由“单 Agent Loop + task router”改为“主 Agent 编排 + 子 Agent 池”：每实例 8 槽（3 治理 + 5 问答），同进程逻辑隔离、外部执行走沙箱，qa 槽空闲可支援治理，管理端可见池状态、子 Agent 运行与 terminate/drain。已同步：constitution C-08（子 Agent run 与 parent_run_id）与新增 C-09（上下文隔离）；spec 2026-11-19 SA-R01～R06 与 US-24；plan AX-R09；tasks SA-01～SA-06；`.trae/rules` 三份规则与 AGENTS/README/wiki/需求文档表述。冲突处理：撤回“第一阶段不实现真实多 Agent”的旧约束，`agent/src/agents/` 由扩展点升为实际实现；既有 G-03/G-04/G-05 预算、审计、审批与 C-05 边界不变。待确认项：多实例下 8 槽仅按实例计，不做跨实例全局槽位；池状态接口只读且不含正文。本次仅文档，不改变运行代码，实施前按 SA-01 起分块验证。

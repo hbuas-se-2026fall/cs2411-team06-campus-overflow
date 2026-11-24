@@ -1,6 +1,6 @@
 # Agent 服务需求文档（二期实施范围）
 
-> **2026-11-21 状态覆盖（优先于下方历史状态）**：T-14～T-17 主体已交付，但父任务未验收；剩余 M-03/M-04（记忆自动更新、旧 memory 清理）、T-15-E/F/G（edit 动作、内容级打标、通知预填）、T-16-C/D（OTel、运行记录归档）、T-17 N-03～N-07（管理员工具通道、MCP 持久化审计、增量同步、Agent 客户端、真实 MCP 配置）已在 `specs/tasks.md` 登记。G-06 真实模型与真实 MySQL 联调仍未完成；子 Agent 池 SA-01/02B/06 已落地，SA-03/04/05 待生产验收。下方 2026-10-23/24 的“未实施/收官”表述以本段为准。
+> **2026-11-24 状态覆盖（优先于下方历史状态）**：T-14～T-17 子项全部完成且父任务已验收——M-03/M-04、T-15 E/F/G、T-16-C/D、T-17 N-03～N-07 均已交付；个人记忆 AI 自动更新走“Agent 候选 + 浏览器同源写入”。仍未完成：真实模型与真实 MySQL 联调、真实外部 MCP Server 联调、生产部署与多实例容量（归部署/运维验收）；子 Agent 池 SA-01/02B/06 已落地，SA-03/04/05 待生产验收。下方 2026-10-23/24 的“未实施/收官”表述以本段为准。
 
 > **2026-10-24 二期正式任务收官（T-14~T-17 实现验证完成，待人工验收）**：在 G 系列主干之上交付——静默巡检调度器与自动建单（US-13 自动化触发）、教师周报调度（KN-R02）、大纲分析任务（KN-R01）、浏览器个人记忆只读注入（聊天契约 browser_memory）、MCP Server 只读同步（registry/policy/audit/http 四模块，MCP_SERVER_ENABLED 默认关）。单列限制：真实模型联调、管理员工具通道（审批工单+身份映射，等大系统对齐）、AI 自动更新记忆、客户端角色。详见 docs/Agent层验证记录/T-14~T-17 四篇与 my_engineer_docs 决策记录。
 
@@ -21,7 +21,7 @@ Agent 服务是独立的 TypeScript 服务（Vercel AI SDK + Hono，Node ≥ 22 
 **必须做**：
 
 - 使用 Vercel AI SDK 调用模型，维护主 Agent 编排与子 Agent 执行入口。
-- 经 FastAPI 白名单接口读写持久化记忆与业务上下文。
+- 业务上下文经 FastAPI 白名单接口读取；个人记忆按 C-07 默认保存在浏览器，Agent 只接收最小必要上下文。
 - 生成结构化建议，流式输出。
 - 自检输出是否满足格式、来源和风险要求。
 - 记录每次运行的 agent_run_id 与 trace id。
@@ -80,14 +80,14 @@ Agent 服务是独立的 TypeScript 服务（Vercel AI SDK + Hono，Node ≥ 22 
 
 MVP 任务类型与风险等级：
 
-> 当前状态：T-11/T-13 已注册 `suggest_tags`、`similar_questions`、`moderation_scan`、`doc_draft` 四种任务类型；只有前两种完成产品能力验收。`moderation_scan` 的工单闭环待 T-15，`doc_draft` 未被 spec 收录；下表中的 `memory_update` 是 T-14 目标，不是当前路由枚举。
+> 当前状态：T-11/T-13 已注册 `suggest_tags`、`similar_questions`、`moderation_scan`、`doc_draft` 四种任务类型；`moderation_scan` 已按 T-15-B 在 `shouldEscalate` 时创建待确认工单，`doc_draft` 未被 spec 收录；`memory_update` 不是独立任务路由，个人记忆更新由 `POST /agent/memory/suggestions` 承载（M-03）。
 
 | 任务 | 风险 | 行为 |
 | ---- | ---- | ---- |
 | suggest_tags | 低 | 返回推荐标签及理由，用户确认后才写入 |
 | similar_questions | 低 | 返回相似问题列表与链接 |
-| moderation_scan | 高 | 当前仅返回风险评估；T-15 才创建审核工单 |
-| memory_update（未实现） | 低/中 | T-14 目标：写入用户偏好、课程上下文、任务经验 |
+| moderation_scan | 高 | 返回风险评估；`shouldEscalate` 时创建待确认工单（T-15-B） |
+| memory_update（M-03 已实现） | 低 | 生成个人记忆候选，由前端按开关写入浏览器；不落后端、不进审计 |
 
 验收标准：
 
@@ -120,7 +120,7 @@ MVP 任务类型与风险等级：
 
 ### 3.4 持久化记忆
 
-记忆读写放 `agent/src/memory/`，只调用 FastAPI 内部接口，实际存储在 MySQL。
+记忆读写放 `agent/src/memory/`。按 C-07 修订版，学生/教师个人记忆只保存在浏览器 localStorage，按账号隔离并可清空；Agent 只生成候选，由前端同源过滤后写入。管理员私人上下文保存在服务器私有文件，与大系统中台会话分目录隔离。业务后端不提供个人记忆列表/删除接口。
 
 | 类型 | 用途 | 示例 |
 | ---- | ---- | ---- |
@@ -315,7 +315,7 @@ interface McpToolDefinition {
 
 ## 6. MVP 验收清单
 
-- [ ] suggest_tags、similar_questions、moderation_scan、memory_update 四类任务可用
+- [ ] suggest_tags、similar_questions、moderation_scan 三类任务可用，个人记忆更新候选可用（`/agent/memory/suggestions`）
 - [ ] 流式输出端到端可演示（生成中 / 失败重试 / 人工确认三态）
 - [ ] 每次运行有唯一 agent_run_id 与 trace id
 - [ ] 未注册工具无法被调用（有测试证明）

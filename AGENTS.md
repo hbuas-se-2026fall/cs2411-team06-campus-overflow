@@ -12,7 +12,7 @@ CampusOverflow AI：面向高校课程场景的智能问答平台。三个服务
 | 前端 | `campus-overflow-ai/frontend/` | Next.js 16（App Router）+ React 19 + TypeScript 5 + Tailwind CSS 4 + @ai-sdk/react（Agent 流式 UI） | 二期补完中 |
 | Agent 服务 | `campus-overflow-ai/agent/` | TypeScript 5 + Vercel AI SDK 7 + Hono/Nitro + Workflow + Zod v4 + MCP Adapter（Node ≥ 24.0.0，ESM；2026-11-03随agent-browser升级） | 二期实施中，Workflow治理接线仍按WF分期 |
 
-> **当前范围**：以 [specs/status.md](./specs/status.md) 为唯一进度源。当前为二期收尾 + 部署准备：T-01～T-13 完成，T-14～T-17 主体已交付、剩余子项已登记；F-C6 与 T-18～T-20 未完成。旧 Q-08“本期只做业务后端”已失效。
+> **当前范围**：以 [specs/status.md](./specs/status.md) 为唯一进度源。当前为二期收尾 + 部署准备：T-01～T-17 已完成（T-16-C/D 于 2026-11-24 补齐，父任务已验收），T-19/T-20 已完成；剩余 F-C6、T-18 部署件与真实环境验收。旧 Q-08“本期只做业务后端”已失效。
 > **角色模型**（spec v3）：RBAC 三角色 student / teacher / admin；助教不是独立角色——研究生身份且助教认证通过 → 助教能力位（`require_graduate_assistant`），解锁学生端助教板块（US-20）。
 
 文档与规格：`specs/`（constitution/spec/plan/tasks/status/analyze）、`docs/`（需求、架构、决策、审查记录）、`.trae/rules/`（工程规则与需求流程）。当前状态只看 `specs/status.md`，决策只看 `docs/decisions/`。
