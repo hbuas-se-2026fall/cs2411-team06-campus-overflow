@@ -1,5 +1,15 @@
 # 任务清单（Tasks）
 
+## 2026-11-24 计划内无依赖步骤并行（SA-07，R-001 已确认）
+
+依据：spec SA-R07、plan AX-R10、ADR-010、requirements/R-001。默认关闭，开启后仅并发行内无依赖的只读步骤；一个 job 仍占一个槽。未完成不得勾选。
+
+- [x] SA-07A 执行器依赖分层与并发：`agent/src/loop/plan-executor.ts` 增加 `$sN` 依赖分析、同层并发、单计划在途上限 4；含 `propose*` 的计划回退串行；8 步 / 12 次 / 60 秒 / 180 秒不变。专项 9 项、typecheck、eslint 通过；待人工审查；见 `agent/tests/plan-parallel.test.ts`。
+- [x] SA-07B 实例信号量、预算与审计串行：进程级在途上限 12（`MAX_INFLIGHT_TOOL_CALLS`）；并发下预算不超发；401/403、策略错误、取消终止全部在途；`PersistentRunAudit` 事件写入串行、`sequence_no` 严格递增。审计串行专项 1 项、相邻回归 103 项、typecheck、eslint 通过；待人工审查；见 `agent/tests/persistent-audit-serial.test.ts`。
+- [x] SA-07C 全局开关：后端新增 `system_settings` 表与迁移 `sa07c_system_settings`，管理员 `GET/PUT /api/governance/settings/plan-parallel` 与内部只读 `GET /internal/agent/runtime-config`；Agent `runtime-config.ts` 30s TTL、失败沿用缓存/默认关闭并接线 `runPlannedTools`；前端设置页下期接入。专项 5 项、Agent 配置 6 项、typecheck/eslint/ruff/lint-imports 通过；见 docs/审查记录/计划内并行/SA-07C-07E.md。
+- [x] SA-07D 验收：专项 11 项覆盖依赖不并发、单计划上限、实例上限、预算、失败传播、治理建单不重不漏；`npm run bench:plan-parallel` 同计划 8 步串行 p95 1025.1ms → 并行 259.7ms，下降 74.7%（门槛 30%）；见 docs/审查记录/计划内并行/SA-07C-07E.md。
+- [x] SA-07E 收口：agent 相关 53 项、backend 设置 5 项与 governance internal 54 项回归、agent typecheck/eslint、backend ruff/lint-imports 全部通过；status 已同步，审查记录已落；见 docs/审查记录/计划内并行/SA-07C-07E.md。
+
 ## 2026-11-19 子 Agent 池与治理可见性（SA-01～SA-06，设计已确认）
 
 依据：spec 2026-11-19 SA-R01～R06 / US-24，plan AX-R09。每实例 8 槽（3 治理 + 5 问答），同进程逻辑隔离、外部执行走沙箱，主 Agent 统一编排与记忆整理；qa 槽空闲可支援治理。以下任务逐项实施，未完成不得勾选。
@@ -150,7 +160,7 @@
 > 完成后在 `- [ ]` 中打勾。
 >
 > **一期实施范围总注**：本期只做业务后端。Phase 1~2 为本期实施内容（后端模块与 pytest）；任务描述中涉及前端页面的部分随第二阶段前端实现一并验收；Phase 3 整体为第二阶段，本期不启动。
-> **二期实施范围总注（2026-11-21 覆盖旧状态）**：第二期实施 Phase 3（Agent 服务与治理逻辑）；T-11～T-13 已完成，T-14～T-17 主体已交付、父任务未验收，剩余 M-03/M-04、T-15-E/F/G、T-16-C/D、T-17 N-03～N-07 已登记；Phase 4（T-18～T-20）推迟至第三期部署阶段。前端 F-C1～F-C5 已完成、F-C6 未完成；不再适用“从 git 历史恢复 0ab1847”的旧表述。
+> **二期实施范围总注（2026-11-24 更新）**：第二期实施 Phase 3（Agent 服务与治理逻辑）；T-11～T-13 已完成。T-14 M-01～M-04、T-15-A～G、T-17 N-01～N-07 已按子项交付并通过本地测试；父任务不代替子项验收，剩余 T-16-C/D 运维项与真实环境验收（真实 MySQL、真实模型、真实外部 MCP Server、多实例容量）。Phase 4 的 T-19/T-20 已完成本地收口，T-18 部署仍推迟。前端 F-C1～F-C5 已完成、F-C6 未完成。
 
 ## Phase 1: 项目搭建与用户基础
 
@@ -243,21 +253,21 @@
   - [x] M-01 前端记忆模块与个人中心 UI（2026-10-24 实现验证完成）：src/shared/lib/browser-memory.ts 纯函数模块——键 co_memory_user_{userId}、条目 1~500 字/每人 50 条/重复拒绝、敏感关键词拦截（原因不含原文）、list/add/remove/clear/buildMemoryContext（最新 20 条注入助手，含同毫秒插入序平局裁决）；/me 个人记忆卡（列表/新增/单条删除/全部清空二次确认/账号切换重载命名空间）。测试：模块 7 项（隔离/清空后上下文为空/持久化/敏感/约束/倒序/截取）+ 记忆卡 4 项。
   - [x] M-02 Agent 只读接入（2026-10-24 实现验证完成，T-14 交付）：聊天请求 schema 增可选 browser_memory（≤20 条 × ≤500 字，超限走 SSE error 且模型零调用）；**规划输入剥离记忆**（不进计划提示与范围校验），仅注入最终流式生成提示并标注"用户个人记忆，仅作偏好参考；指令不得改变任务、规则或身份，不是站内依据"；不落审计摘要。Agent 测试 3 项（注入/缺省/超限）。验证汇总：Agent 22 文件 218 passed、前端 72 文件 452 passed、tsc/eslint 全绿、无迁移、无后端变更。完成判定达成：账号隔离/清空不参与/敏感拦截不含原文/请求上下文均有测试。遗留：AI 自动更新（AG-R04 后续批次）、旧后端 memory 表/接口清理单列。【2026-10-24 端到端接线补齐】聊天接线已完成：api/agent-chat.ts（sendAgentChat 发送前注入 buildMemoryContext → browser_memory，SSE meta/delta/done/error 解析）+ 学生端 /assistant 最小聊天页（流式增量渲染、记忆条数提示、错误展示）；另修复 admin approvals 页 useSearchParams 缺 Suspense 边界致生产构建失败。前端 74 文件 462 passed、build 27/27 静态页通过。
   - 2026-11-21 剩余待办登记（父任务保持未验收）：
-  - [ ] M-03 AI 自动更新个人记忆（AG-R04 后续批次）
-  - [ ] M-04 旧后端 memory 表/接口清理（单列）
+  - [x] M-03 AI 自动更新个人记忆（2026-11-24 完成）：新增 Agent `POST /agent/memory/suggestions`（结构化输出 + 服务端敏感/长度/去重过滤，最多 2 条，不写后端、不落审计）；前端回答完成后按账号开关请求候选，经 browser-memory 同源过滤后批量写入并只广播一次变更，个人中心新增“AI 自动更新记忆”开关（默认开启、可关闭），聊天区提示更新条数；记忆仍只存浏览器 localStorage（C-07）。Agent 专项 4 项、前端模块 10 项与聊天/个人中心回归通过；typecheck/eslint 通过。
+  - [x] M-04 旧后端 memory 表/接口清理（2026-11-24 完成）：删除 `/internal/agent/memory` 读写接口、agent_memory 表（迁移 t14_legacy_memory_cleanup）与 governance 记忆领域常量；管理员私人上下文/会话保持独立私有文件；测试改用 runtime-config 验服务鉴权，治理回归 69 passed、ruff/5 契约通过。
 
 - [ ] 【第二阶段】T-15 内容风险预警与审批中心（US-13、US-14、US-16 申诉、Q-06）
   - 目标：静默检测新内容并按风险分级（低打标/中高建工单附快照与原因）；审批中心处理动作（忽略/修改/临时隐藏/软删除/警告/限时封禁/永久封禁）；封禁记录原因、期限、操作者、快照；申诉提交与复核
   - 完成判定：Agent 无法直接隐藏/删除/封号，只能创建工单；全部处置动作留审计记录；边界测试覆盖风险分级
   - 2026-10-24 批次拆解（承接既有基础：T-12/T-16 的双环状态机、hide/delete/ban/skip 真实处置、moderation_scan 评估任务、审批中心前端骨架与学生申诉页均已存在）：
   - [x] T-15-A 审批中心对外接口与申诉闭环（2026-10-24 实现验证完成）：501 占位全部替换为真实接口——GET /api/governance/moderation/cases（状态/来源筛选分页）、POST .../cases/{id}/resolve（管理员直决复用双环两步推进，pending→manager_directed→executed 真实处置，skip 直终态，agent_proposed 确认共用入口）、POST /api/appeals（学生提交，自动定位本人最近 executed 工单，重复拒绝；**申诉入口放行 banned 状态**——US-16 封禁用户救济权，专用依赖 get_current_user_allow_banned，决策记录见 my_engineer_docs/2026-10-24_申诉入口放行封禁状态.md）、GET /api/governance/appeals 与 POST .../appeals/{id}/resolve（复核维持/撤销；撤销按处置回退：ban→解禁、hide→恢复可见、delete→恢复软删，回退与申诉留痕同事务，工单保持 executed 终态）；专项 9 项 + 治理/身份回归 131 passed、ruff 零 error、5 契约 KEPT；无迁移。
-  - [x] T-15-B Agent 升级建工单与静默巡检（2026-10-24 实现验证完成）：后端新增 GET /internal/agent/patrol/contents（全站时间窗新内容清单，问题/回答/评论三类 union、回答/评论课程经父问题推导、软删/隐藏排除）与 POST /internal/agent/patrol/cases（判重幂等 repeat、pending 工单 source=agent，C-06 只建单不处置；已结案后复发可再建）；Agent 新增 scheduler/moderation-patrol.ts——默认 15 分钟一轮（可配）、逐条 LLM 风险评估（60 秒限时、无处置权）、中高险且 shouldEscalate 建单（快照截断摘要+原因+trace）、低风险仅审计跳过、单条失败隔离、整轮清单失败 failed 终态下轮重试；服务级无主运行审计贯穿。后端专项 2 项 + 回归 83 passed、Agent 21 文件 215 passed、ruff/eslint/5 契约全绿；无迁移。低风险"打标"当前为运行级审计摘要，内容列标记归 D 批次。
+  - [x] T-15-B Agent 升级建工单与静默巡检（2026-10-24 实现验证完成）：后端新增 GET /internal/agent/patrol/contents（全站时间窗新内容清单，问题/回答/评论三类 union、回答/评论课程经父问题推导、软删/隐藏排除）与 POST /internal/agent/patrol/cases（判重幂等 repeat、pending 工单 source=agent，C-06 只建单不处置；已结案后复发可再建）；Agent 新增 scheduler/moderation-patrol.ts——默认 15 分钟一轮（可配）、逐条 LLM 风险评估（60 秒限时、无处置权）、中高险且 shouldEscalate 建单（快照截断摘要+原因+trace）、低风险仅审计跳过、单条失败隔离、整轮清单失败 failed 终态下轮重试；服务级无主运行审计贯穿。后端专项 2 项 + 回归 83 passed、Agent 21 文件 215 passed、ruff/eslint/5 契约全绿；无迁移。低风险"打标"当时仅运行级审计摘要，内容级标记已由 T-15-F 补齐。**2026-11-24 补齐**：单次 `moderation_scan` 任务在 `shouldEscalate` 为真时同样经 `POST /internal/agent/patrol/cases` 创建 pending 工单（快照优先已核验正文，否则标注请求方摘录），只建单不处置；Agent 任务路由测试新增升级/不升级两项断言。
   - [x] T-15-C 治理通知（2026-10-24 实现验证完成）：新增 governance/service_notify.py 复用 T-10 通知机制（type=moderation，前端 NotificationsView 已预留映射）——巡检/工单创建→全部管理员（identity 新增跨模块 get_admin_ids）、处置结果→当事人（skip 也通知"经复核无需处置"的澄清）、申诉提交→管理员、复核结果→申诉人（撤销/维持两种文案）；全部与业务写入同事务（通知失败整体回滚，沿用 T-10"不出现部分成功"口径）；通知跳转链接指向 admin 审批页与申诉页锚点。专项 3 项 + 治理回归 73 passed、ruff 零 error、5 契约 KEPT；无迁移。
-  - [x] T-15-D 处置动作补全与前端接数据（2026-10-24 实现验证完成，T-15 整体交付）：①users 表新增 banned_until 可空列（迁移 t15_ban_temp 隔离库三段验证），ban_temp 写入期限（缺省 7 天、1~30 可调、超界 400），**到期惰性解禁**——身份探针/处置探针发现过期即恢复 active 并留系统解禁审计（actor=0），不依赖定时任务；②warn 警告动作——状态与内容不变，审计留痕 + 当事人通知；③决策白名单开放 warn/ban_temp（目标匹配：ban/ban_temp/warn 仅对用户、hide/delete 仅对内容）；④申诉回退覆盖 ban_temp（解禁统一清空原因与期限）；⑤admin 三页接真实数据——审核队列（状态/来源筛选、处理入口）、审批中心（队列+详情+按目标类型条件渲染处置动作组、danger 动作 ConfirmDialog 二次确认、处置时间线展示）、申诉处理（状态筛选、复核说明、撤销/维持）；新增 api/governance.ts 与 shared/types/governance.ts。后端专项 5 项 + 回归 125 passed、前端 68 文件 435 passed、tsc/eslint/ruff/5 契约/迁移全绿。至此 US-13/14/16 全链路交付：静默巡检自动建单 → 审批中心处置（hide/delete/ban/ban_temp/warn）→ 通知 → 申诉 → 复核回退。遗留：edit 动作（要求修改流程）仍不开放；通知链接的 case_id 预填随申诉页增强。
+  - [x] T-15-D 处置动作补全与前端接数据（2026-10-24 实现验证完成，T-15 整体交付）：①users 表新增 banned_until 可空列（迁移 t15_ban_temp 隔离库三段验证），ban_temp 写入期限（缺省 7 天、1~30 可调、超界 400），**到期惰性解禁**——身份探针/处置探针发现过期即恢复 active 并留系统解禁审计（actor=0），不依赖定时任务；②warn 警告动作——状态与内容不变，审计留痕 + 当事人通知；③决策白名单开放 warn/ban_temp（目标匹配：ban/ban_temp/warn 仅对用户、hide/delete 仅对内容）；④申诉回退覆盖 ban_temp（解禁统一清空原因与期限）；⑤admin 三页接真实数据——审核队列（状态/来源筛选、处理入口）、审批中心（队列+详情+按目标类型条件渲染处置动作组、danger 动作 ConfirmDialog 二次确认、处置时间线展示）、申诉处理（状态筛选、复核说明、撤销/维持）；新增 api/governance.ts 与 shared/types/governance.ts。后端专项 5 项 + 回归 125 passed、前端 68 文件 435 passed、tsc/eslint/ruff/5 契约/迁移全绿。至此 US-13/14/16 全链路交付：静默巡检自动建单 → 审批中心处置（hide/delete/ban/ban_temp/warn）→ 通知 → 申诉 → 复核回退。遗留（已由 T-15-E/T-15-G 补齐）：edit 动作、通知链接 case_id 预填。
   - 2026-11-21 剩余待办登记（父任务保持未验收）：
-  - [ ] T-15-E 开放 edit（要求修改）动作
-  - [ ] T-15-F 低风险内容级打标（当前仅运行级审计摘要）
-  - [ ] T-15-G 通知链接 case_id 预填
+  - [x] T-15-E 开放 edit（要求修改）动作（2026-11-24 完成）：questions/answers 新增 needs_revision（迁移 t15_edit_action）；决策白名单与目标匹配开放 edit（评论 400），执行置标记并通知；作者编辑自动清除；申诉撤销 edit 清除标记；Agent 审批/工作流枚举同步；后端专项 4 项通过。
+  - [x] T-15-F 低风险内容级打标（2026-11-24 完成）：新增 moderation_marks（迁移 t15_risk_mark，按目标唯一）+ `POST /internal/agent/patrol/marks` 与管理员 `GET /api/governance/moderation/marks`；巡检低风险改写内容级标记而非只留运行摘要；幂等/缺失目标/鉴权 4 项通过。
+  - [x] T-15-G 通知链接 case_id 预填（2026-11-24 核验完成）：后端创建/处置通知已带 `?case_id=`，管理端审批中心通过 useSearchParams 定位工单（ApprovalCenterView），无需新增后端改动。
 
 - [ ] 【第二阶段】T-16 观测与审计（US-18、C-08）
   - 目标：agent run / tool call / approval request 记录 trace id、agent_run_id、调用摘要；管理员可查看运行记录与失败原因；记录可互相关联
@@ -279,11 +289,11 @@
   - [x] N-01 MCP 服务端核心（2026-10-24 实现验证完成）：registry（scope 白名单 read/admin:query/admin:act，管理员工具枚举预留）/policy（Bearer 凭证 timing-safe 映射→scopes，scope 不足拒绝）/audit（结构化日志，参数与结果脱敏摘要复用 sensitive.ts）/server（SDK Server 低阶 setRequestHandler：未注册/scope 不足/入参非法/执行失败均 isError 结果，脱敏原因不透传底层异常）；只读工具 search_questions/search_courses/list_tags 经 service 级 internal-client（MCP 层零 SQL，C-05）；InMemoryTransport + SDK Client 全链路测试 16 项（白名单/策略/审计脱敏/失败隔离/凭证单元）。
   - [x] N-02 HTTP 传输与接线（2026-10-24 实现验证完成，T-17 第一批交付）：Streamable HTTP 无状态模式（会话工厂启动时注入，请求路径只做鉴权与分发——Mimosa 对协议适配层的入口误报以此结构化边界化解）；每请求鉴权 401 + trace（mcp-<uuid>）贯通审计；server.ts 按 MCP_SERVER_ENABLED（默认关）+ MCP_EXTERNAL_CLIENTS + MCP_PORT（默认 8790）开关启动；真实 HTTP 集成测试 3 项（无效凭证 401、SDK Client 完整握手 initialize/listTools/callTool、同进程失败隔离）。验证汇总：Agent 24 文件 237 passed、tsc/eslint 零错误、无迁移、无后端变更。完成判定达成：未注册工具不可被调用；MCP 调用失败不影响核心问答；MCP 不能直改核心业务表。遗留（后续批次）：管理员工具通道（scope admin:*，操作走审批工单+身份映射落地）、持久化调用审计、增量同步接口、Agent 消费外部工具的客户端角色。
   - 2026-11-21 剩余待办登记（父任务保持未验收）：
-  - [ ] N-03 管理员工具通道（admin:* scope，操作走审批工单 + 身份映射）
-  - [ ] N-04 持久化 MCP 调用审计
-  - [ ] N-05 增量同步接口
-  - [ ] N-06 Agent 作为客户端消费外部 MCP 工具
-  - [ ] N-07 真实 MCP Server 配置管理与高风险工具人工确认
+  - [x] N-03 管理员工具通道（2026-11-24 核验完成）：`admin:query`/`admin:act` scope 与外部凭证身份映射已落地（`mcp/policy.ts` + `X-External-Agent-Key` 映射 active 管理员）；管理操作只建治理申请/审批工单，不直接处置。Agent 专项 6 项与后端外部身份/审批回归通过。
+  - [x] N-04 持久化 MCP 调用审计（2026-11-24 完成）：后端新增 `mcp_call_logs`（迁移 `n04_mcp_call_logs`）与 `POST /internal/agent/mcp/calls`、管理员 `GET /api/governance/mcp/calls`（客户端/工具/状态筛选分页）；Agent `createPersistedMcpCallAudit` 异步写后端，失败只记事件不阻塞调用；`MCP_AUDIT_PERSIST_ENABLED=false` 可退回结构化日志。后端专项 3 项、Agent 专项 3 项通过。
+  - [x] N-05 增量同步接口（2026-11-24 完成）：后端 `GET /internal/agent/sync/questions`（`updated_after` + id 游标 + ≤200，排除软删/隐藏，只返回 id/标题/课程/时间）；MCP 只读工具 `sync_questions` 接入白名单与入参校验。后端专项 3 项、Agent 专项 2 项通过。
+  - [x] N-06 Agent 作为客户端消费外部 MCP 工具（2026-11-24 完成）：`agent/src/mcp/upstream.ts` 从 `MCP_UPSTREAM_SERVERS` 解析白名单（≤5 服务、每服务 ≤20 工具），低风险工具经工具注册表进入模型工具集，每次调用短连接外部 Server；外部结果不进入授权判断。Agent 专项 6 项通过。
+  - [x] N-07 真实 MCP Server 配置管理与高风险工具人工确认（2026-11-24 完成）：新增管理员 `GET /agent/admin/mcp/upstream`（脱敏展示来源/风险/是否模型可见）与 `POST /agent/admin/mcp/upstream/call`；高风险工具须配置 `confirmed: true` 且每次调用经 `POST /internal/agent/approvals` 生成 `call_mcp_tool` 待确认工单，确认前不执行。Agent 专项覆盖建单不执行；真实外部 Server 联调归部署/运维验收，不计入本轮。
 
 ## Phase 4: 部署与验收【第三期部署阶段（2026-10-06 用户决策推迟）】
 
@@ -291,11 +301,11 @@
   - 目标：backend + MySQL 容器化；Nginx 统一入口（可选）；不含 Redis（第一阶段）
   - 完成判定：`docker compose up` 一键启动后服务健康检查通过，核心问答主流程可演示
 
-- [ ] 【第三期】T-19 测试补齐（C-03；v2 修订：一期范围 = 后端 pytest 核心流程；前端与 Agent vitest 随第二阶段补齐；2026-10-06 v3 修订：整体推迟至第三期部署阶段）
+- [x] 【第三期】T-19 测试补齐（2026-11-24 收口）：后端全量 `uv run pytest -q` 863 passed / 29 skipped（跳过项为需真实 MySQL/Docker/外部服务用例，归真实环境验收）；Agent 106 文件 835 passed；前端 82 文件 514 passed；后端 ruff/lint-imports 与前端/Agent tsc/eslint 全绿。认证、权限、问答、互动、通知、治理审批、MCP 白名单与内部接口边界均有专项覆盖。
   - 目标：认证、角色与助教能力位、问答、投票、采纳、通知核心流程 pytest；治理建表与占位接口的边界测试（501 与表结构约束）
   - 完成判定：`uv run pytest` 全部通过且覆盖 E-01~E-13、X-01~X-06 中后端可验证项
 
-- [ ] 【第三期】T-20 宪法自检与收尾（C-01/C-02/C-04；v2 修订：一期自检限于已实现的后端部分，界面条款待前端阶段补检；2026-10-06 v3 修订：整体推迟至第三期部署阶段，与恢复后的前端一并补检）
+- [x] 【第三期】T-20 宪法自检与收尾（2026-11-24 完成）：C-01～C-09 逐条自检记录于 `specs/analyze.md` 2026-11-24 节；C-02/C-03 以三服务全量测试与 lint 为证据，C-04 以源码渐变类检索为证据，C-05/C-06/C-07/C-08/C-09 以架构检索与专项测试为证据。真实浏览器视觉走查、真实 MySQL 迁移与生产部署明确标注归部署验收，不计入本轮。
   - 目标：对照 constitution.md 可适用条款逐条自检——后端 lint 零 error、pytest 全绿、错误消息与接口描述为简体中文、无敏感信息泄漏；C-01 界面文案与 C-04 视觉条款随第二阶段前端实现补检
   - 完成判定：一期自检结果记录到 specs/analyze.md，未适用条款显式标注"待二期"
 

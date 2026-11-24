@@ -1,5 +1,27 @@
 # 技术方案（Plan）
 
+## 2026-11-24 计划内无依赖步骤并行（AX-R10，R-001 用户确认）
+
+对应 spec SA-R07、ADR-010 与 R-001。只做同一子 Agent 计划内的步骤并行，一个 job 仍只占一个槽位。
+
+执行器设计：
+
+- 新增依赖分析：解析步骤参数中的 `$sN` 引用，构建步骤 DAG；引用不存在或成环在 `validatePlan` 阶段拒绝。同层无依赖步骤可并发，有依赖步骤等待前驱完成。
+- 顺序语义保留：计划中出现 `proposeGovernance`、`proposeClassMembership`、`proposeTeachingExperience` 时整份计划回退串行，避免审批顺序与幂等语义变化。
+- 并发上限：单计划默认 4 个在途工具调用（`PLAN_MAX_PARALLEL_STEPS`）；进程级在途调用总上限默认 12（`MAX_INFLIGHT_TOOL_CALLS`），按 4C4G 设定，所有槽位共享同一信号量。
+- 预算：执行前同步 `consume()`，8 步、12 次调用、单次 60 秒、整次 180 秒不变；并发不超发，返工不重置。
+- 失败语义：普通工具失败记入 `failures` 并继续；401/403、`SecurityPolicyError`、取消、预算耗尽取消全部在途调用后抛出。
+- 审计：工具执行并行，审计事件经 `PersistentRunAudit` 进程内串行队列写入，保持 `sequence_no` 严格递增与 `step_id` 对账，不改后端协议。
+- 结果结构：`ExecutePlanResult` 的 `stepResults`、`failures`、`toolCallCount`、`state` 保持不变，调用方无感。
+
+开关：
+
+- `PLAN_PARALLEL_ENABLED` 默认关闭；未开启时保持现有串行执行。
+- 全局开关存后端配置表，仅 active 管理员可改；本期交付管理员读写的后端接口与 Agent 读取通道，前端三端设置页下期接入。
+- 多实例读取同一后端配置；Agent 侧允许短 TTL 缓存，配置更新不作为强一致要求。
+
+非范围（登记下期）：多子 Agent / 跨 job 并行、写与审批步骤并行、并发度自适应、修改预算与恢复机制。
+
 ## 2026-11-19 主 Agent 编排与子 Agent 池（AX-R09，用户确认）
 
 对应 spec SA-R01～R06 与 US-24。用户确认：主 Agent 负责编排与记忆整理，子 Agent 负责在沙箱边界内执行；每实例最多 8 个子 Agent，其中 3 个固定用于管理端治理、5 个服务学生问答，问答槽空闲时支援治理，调度思想类比 IO 多路复用。

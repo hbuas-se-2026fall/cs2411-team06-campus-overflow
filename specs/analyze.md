@@ -1,5 +1,23 @@
 # 一致性分析报告（Analyze）
 
+## 2026-11-24 M-03 / T-15-B 补齐 / T-17 N-03～N-07 / T-19-T-20 收口复核
+
+本轮完成 T-14 M-03（AI 记忆候选 + 浏览器确认写入 + 开关）、T-15-B 单次 `moderation_scan` 升级建单、T-17 N-03～N-07（管理员通道核验、MCP 持久化审计、增量同步、外部 MCP 客户端、配置管理 + 高风险待确认工单），并完成 T-19/T-20 收尾。实现与 spec US-13/17/18/19、plan 及宪法无冲突：Agent 仍只走 `/internal/agent/*`，MCP 工具全部白名单注册，高风险外部工具只建工单不执行，记忆只存浏览器且不落审计。
+
+宪法逐条自检（可适用范围）：
+
+- C-01 界面文案简体中文：本轮新增开关与提示文案均为简体中文；前端全量测试与静态检查通过，未做真实浏览器逐页视觉走查（归部署验收）。
+- C-02 代码风格：后端 `ruff check .` 零 error；Agent `typecheck` + `eslint` + 前端 `tsc`/`lint` 通过。
+- C-03 基础测试：后端 863 passed / 29 skipped（跳过项为需真实 MySQL/Docker/外部服务的用例）；Agent 106 文件 835 passed；前端 82 文件 514 passed。
+- C-04 无蓝紫渐变：前端源码检索 `bg-gradient` 与 purple/violet/indigo/blue 渐变类均为 0；真实视觉走查归部署验收。
+- C-05 三服务分离：Agent 源码无 MySQL/SQLAlchemy/PyMySQL 直连；外部数据经内部白名单接口与 MCP 服务。
+- C-06 工具白名单：普通工具在 `tools/registry.ts`，MCP 工具在 `mcp/registry.ts`；外部 MCP 仅配置白名单可注册，高风险工具不进模型工具集。
+- C-07 记忆隔离：学生/教师记忆仅 localStorage，按账号命名空间；自动更新经同源敏感过滤且可关闭/清空；管理员私人上下文继续服务端私有文件。
+- C-08 可追踪：MCP 调用审计持久化到 `mcp_call_logs`（trace + 摘要），运行/工具/审批沿用既有 trace、agent_run_id。
+- C-09 子 Agent 隔离：本轮未改变槽位与上下文装配；SA-06 并发与复用测试仍通过。
+
+结论：本轮本地实现与测试可收口；真实 MySQL 迁移、真实外部 MCP Server 联调、真实模型与多实例容量明确不在本轮，保持未验收。
+
 ## 2026-11-19 子 Agent 池设计变更复核（设计阶段，未实施）
 
 用户确认由“单 Agent Loop + task router”改为“主 Agent 编排 + 子 Agent 池”：每实例 8 槽（3 治理 + 5 问答），同进程逻辑隔离、外部执行走沙箱，qa 槽空闲可支援治理，管理端可见池状态、子 Agent 运行与 terminate/drain。已同步：constitution C-08（子 Agent run 与 parent_run_id）与新增 C-09（上下文隔离）；spec 2026-11-19 SA-R01～R06 与 US-24；plan AX-R09；tasks SA-01～SA-06；`.trae/rules` 三份规则与 AGENTS/README/wiki/需求文档表述。冲突处理：撤回“第一阶段不实现真实多 Agent”的旧约束，`agent/src/agents/` 由扩展点升为实际实现；既有 G-03/G-04/G-05 预算、审计、审批与 C-05 边界不变。待确认项：多实例下 8 槽仅按实例计，不做跨实例全局槽位；池状态接口只读且不含正文。本次仅文档，不改变运行代码，实施前按 SA-01 起分块验证。
