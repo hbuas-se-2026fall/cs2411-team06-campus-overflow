@@ -11,7 +11,7 @@
 - [x] T-21C Agent 执行接线：`plan-executor` 在 step/模型调用前检查控制状态，paused 时 2s 轮询，resume 从断点继续、cancel 进入终态；管理员聊天在每次模型 turn 前同样检查；引导作为独立段落注入下一次 prompt，写 `control_*` 事件且正文不入库。验收：vitest 假后端覆盖暂停/恢复/取消/引导注入顺序。控制专项 8 项、相邻回归 150 项、typecheck、eslint 通过；后端事件契约扩展后专项 30 项 + governance 52 项、ruff 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-21C-Agent执行接线.md`。
 - [x] T-21D 超时与跨实例收敛：暂停超过 30 分钟由后端惰性判定 + 定时清理自动取消并释放占位，Agent 本地兜底；两实例共享同一状态，命令只被消费一次。验收：假时钟测试 + 双实例并发 ack 测试。后端四文件 84 项、ruff、lint-imports 5 contracts、迁移 `rc02_system_commands`；Agent 控制专项 7 项、相邻回归 48 项、typecheck/eslint 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-21D-超时收敛与跨实例.md`。
 - [x] T-21E 管理端最小页面：运行详情内暂停/继续/取消、引导词输入与状态回显；加载/空/错误状态齐全，交互有审计提示。验收：组件测试 + 手动走查。组件专项 8 项、相邻回归 11 项、tsc、eslint、check:rules 通过；手动走查待人工审查；见 `docs/审查记录/运行控制与skill/T-21E-管理端控制页.md`。
-- [ ] T-21F 验收收口：关闭 `RUN_CONTROL_ENABLED` 时行为与现状一致；开启后回归预算（8 步/12 次/60 秒/180 秒）、审批与取消语义不变；status 与审查记录同步。
+- [x] T-21F 验收收口：关闭 `RUN_CONTROL_ENABLED` 时行为与现状一致；开启后回归预算（8 步/12 次/60 秒/180 秒）、审批与取消语义不变；status 与审查记录同步。Agent 关闭态 8 文件 158 项、开启态核心 5 文件 118 项、后端控制 71 项、typecheck/eslint 通过；真实环境手动走查待人工审查；见 `docs/审查记录/运行控制与skill/T-21F-开关关闭与回归收口.md`。
 
 ### T-22 长期工作流 skill 沉淀
 
