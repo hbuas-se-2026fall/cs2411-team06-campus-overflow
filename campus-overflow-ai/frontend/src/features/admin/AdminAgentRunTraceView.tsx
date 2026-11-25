@@ -13,6 +13,8 @@ import {
 } from "@/shared/components";
 import { useAsyncData } from "@/shared/hooks/useAsyncData";
 
+import { AdminRunControlPanel } from "./AdminRunControlPanel";
+
 const TASK_TYPE_LABELS: Record<string, string> = {
   chat: "智能问答", suggest_tags: "标签推荐", similar_questions: "相似问题",
   moderation_scan: "风险扫描", doc_draft: "文档草稿", knowledge_tree: "大纲分析",
@@ -69,6 +71,13 @@ export function AdminAgentRunTraceView({ agentRunId }: { agentRunId: string }) {
           <p className="text-[13px] text-ink-muted">结果摘要：{run.output_summary}</p>
         ) : null}
       </Card>
+
+      {/* 运行中人工控制（T-21E）：仅治理扫描与管理员聊天可操作，其他任务只读提示 */}
+      <AdminRunControlPanel
+        agentRunId={run.agent_run_id}
+        taskType={run.task_type}
+        isRunActive={run.status === "running"}
+      />
 
       <Card className="flex flex-col gap-2 p-5">
         <h3 className="text-[15px] font-semibold text-ink">计划与步骤</h3>

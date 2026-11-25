@@ -83,6 +83,50 @@ export function fetchAgentRunTrace(agentRunId: string) {
   );
 }
 
+/** 运行中人工控制（T-21E / RC-R01～R05）：状态回显与暂停/继续/取消/引导。 */
+export type RunControlState = "running" | "paused" | "cancelled";
+export type RunControlAction = "pause" | "resume" | "cancel";
+
+export interface RunControlItem {
+  agent_run_id: string;
+  state: RunControlState;
+  revision: number;
+  pause_deadline: string | null;
+  updated_by: number | null;
+  updated_at: string | null;
+}
+
+export function fetchRunControl(agentRunId: string) {
+  return apiFetch<RunControlItem>(
+    `/governance/agent-runs/${encodeURIComponent(agentRunId)}/control`,
+  );
+}
+
+export function applyRunControl(
+  agentRunId: string,
+  action: RunControlAction,
+  expectedRevision: number,
+) {
+  return apiFetch<RunControlItem>(
+    `/governance/agent-runs/${encodeURIComponent(agentRunId)}/control`,
+    { method: "POST", body: JSON.stringify({ action, expected_revision: expectedRevision }) },
+  );
+}
+
+export function addRunGuidance(
+  agentRunId: string,
+  guidanceText: string,
+  expectedRevision: number,
+) {
+  return apiFetch<RunControlItem>(
+    `/governance/agent-runs/${encodeURIComponent(agentRunId)}/guidance`,
+    {
+      method: "POST",
+      body: JSON.stringify({ guidance_text: guidanceText, expected_revision: expectedRevision }),
+    },
+  );
+}
+
 /** 运行池（SA-04）：同源 BFF 转发到 Agent 管理路由。 */
 export type AgentPoolSlotKind = "qa" | "governance";
 export type AgentPoolSlotState = "idle" | "leased" | "running" | "draining";
