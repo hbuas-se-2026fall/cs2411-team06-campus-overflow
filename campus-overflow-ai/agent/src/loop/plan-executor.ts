@@ -229,6 +229,8 @@ export interface ExecutePlanOptions extends PlanValidationOptions {
   /** 解析引用后、实际调用前验证任务范围；策略错误不得按读取故障降级。 */
   assertArgs?: (toolName: string, args: Readonly<Record<string, unknown>>) => void;
   audit?: PlanAudit;
+  /** 每次工具调用前的运行控制检查（T-21C）：暂停等待、取消退出，不改变步骤顺序。 */
+  beforeStep?: () => Promise<void>;
   /** 并行开关覆盖；缺省读取 PLAN_PARALLEL_ENABLED（全局开关接线后由调用方传入）。 */
   parallel?: boolean;
 }
@@ -264,6 +266,7 @@ export const executePlan = async (
 
   /** 执行单个步骤；返回 true 表示该步骤要求后续停止（待人工确认）。 */
   const runStep = async (step: PlanStep): Promise<boolean> => {
+    await options.beforeStep?.();
     checkSignal(signal);
     const tool = requireExecutableTool(options.registry, step.toolName);
     const args = resolveArgs(step, stepResults, options.input);

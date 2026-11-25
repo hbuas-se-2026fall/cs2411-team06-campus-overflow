@@ -167,6 +167,28 @@ class ChatStreamEventConflictError(ChatStreamStateError):
     http_status = 409
 
 
+class RunControlStateError(DomainError):
+    """运行状态或任务类型不允许该控制动作（RC-R01/R05）。"""
+
+    http_status = 400
+
+
+class RunControlConflictError(DomainError):
+    """控制命令 revision 冲突：并发命令只能有一个生效（RC-R02）。"""
+
+    http_status = 409
+
+    def __init__(self, current_revision: int) -> None:
+        self.current_revision = current_revision
+        super().__init__(f"控制命令版本冲突，当前版本为 {current_revision}")
+
+
+class RunControlDisabledError(DomainError):
+    """运行控制功能未启用（默认关闭，T-21F）。"""
+
+    http_status = 409
+
+
 class ReportSensitiveError(DomainError):
     """周报内容包含敏感信息（密钥/口令类原文），写入被拒绝（KN-R02 / C-07 精神）。"""
 
@@ -350,6 +372,16 @@ def ensure_run_event(history: list[dict], event: dict) -> None:
     """审计事件按计划/开始/完成追加，不能通过新计划重置调用预算。"""
     plans = [item for item in history if item["event_type"] == "plan"]
     revision = event["plan_revision"]
+    if event["event_type"] in (
+        "control_pause", "control_resume", "control_cancel", "control_guidance",
+    ):
+        # 控制事件不携带步骤信息，只标记发生时的计划版本（计划前为 0）
+        expected = plans[-1]["plan_revision"] if plans else 0
+        if (revision != expected or event["steps"] is not None
+                or event["step_id"] is not None or event["tool_name"] is not None
+                or event["duration_ms"] is not None):
+            raise RunStateError("控制事件字段不合法")
+        return
     pending = pending_audit_steps(history)
     if event["event_type"] == "plan":
         steps = event["steps"]

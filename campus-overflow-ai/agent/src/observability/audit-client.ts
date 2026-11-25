@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { TraceId } from "../types/index.js";
 
+export type AuditEventType =
+  | "plan" | "step_started" | "step_succeeded" | "step_failed"
+  | "control_pause" | "control_resume" | "control_cancel" | "control_guidance";
 export interface AuditEventInput {
-  event_type: "plan" | "step_started" | "step_succeeded" | "step_failed";
+  event_type: AuditEventType;
   plan_revision: number;
   steps?: { step_id: string; tool_name: string }[];
   step_id?: string; tool_name?: string; duration_ms?: number;
@@ -24,8 +27,9 @@ const RunAck = z.object({
 const EventAck = z.object({
   id: z.number().int().positive(), sequence_no: z.number().int().positive(),
   agent_run_id: z.string(), trace_id: z.string(),
-  event_type: z.enum(["plan", "step_started", "step_succeeded", "step_failed"]),
-  plan_revision: z.number().int().min(1).max(2),
+  event_type: z.enum(["plan", "step_started", "step_succeeded", "step_failed",
+    "control_pause", "control_resume", "control_cancel", "control_guidance"]),
+  plan_revision: z.number().int().min(0).max(2),
   steps: z.array(z.object({ step_id: z.string(), tool_name: z.string() })).nullable().optional(),
   step_id: z.string().nullable().optional(), tool_name: z.string().nullable().optional(),
   duration_ms: z.number().int().nonnegative().nullable().optional(),

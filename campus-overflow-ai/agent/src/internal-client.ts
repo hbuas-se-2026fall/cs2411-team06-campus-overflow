@@ -288,6 +288,25 @@ export interface InjectedPatrolNotes {
   max_chars: number;
 }
 
+/** 运行控制命令与状态（T-21C / RC-R01～R05）：Agent 只跟随后端权威状态。 */
+export const RunControlCommandSchema = z.object({
+  id: z.number().int().positive(),
+  revision: z.number().int().nonnegative(),
+  action: z.enum(["pause", "resume", "cancel", "guidance"]),
+  guidance_text: z.string().nullable().optional(),
+  guidance_digest: z.string().nullable().optional(),
+});
+export type RunControlCommandItem = z.infer<typeof RunControlCommandSchema>;
+
+export const RunControlSnapshotSchema = z.object({
+  enabled: z.boolean(),
+  state: z.enum(["running", "paused", "cancelled"]),
+  revision: z.number().int().nonnegative(),
+  pause_deadline: z.string().nullable().optional(),
+  commands: z.array(RunControlCommandSchema).max(50),
+});
+export type RunControlSnapshotItem = z.infer<typeof RunControlSnapshotSchema>;
+
 export interface InternalClient {
   searchCourses(params: { keyword: string; limit?: number }, traceId: TraceId): Promise<CourseSearchResult[]>;
   searchQuestions(
@@ -376,6 +395,10 @@ export interface InternalClient {
     traceId: TraceId,
   ): Promise<InjectedPatrolNotes>;
   fetchLearningFeedback?(params: { courseId: number; days?: number }, traceId: TraceId): Promise<LearningFeedback>;
+  /** 运行控制状态拉取（T-21C）：since_revision 之后仍未消费的命令。 */
+  getRunControl?(agentRunId: string, sinceRevision: number, traceId: TraceId): Promise<RunControlSnapshotItem>;
+  /** 控制命令消费确认（T-21C）：重复 ack 幂等，返回本次实际标记数量。 */
+  ackRunControl?(agentRunId: string, commandIds: readonly number[], traceId: TraceId): Promise<number>;
 }
 
 export interface UserInternalClient extends InternalClient {
@@ -1089,6 +1112,24 @@ export const createInternalClient = (
         },
         traceId, InjectedPatrolNotesSchema,
       ),
+    getRunControl: async (agentRunId, sinceRevision, traceId) => {
+      const id = z.string().min(1).max(64).parse(agentRunId);
+      return request(
+        `/internal/agent/runs/${encodeURIComponent(id)}/control`,
+        { since_revision: String(z.number().int().nonnegative().parse(sinceRevision)) },
+        traceId, RunControlSnapshotSchema,
+      );
+    },
+    ackRunControl: async (agentRunId, commandIds, traceId) => {
+      const id = z.string().min(1).max(64).parse(agentRunId);
+      const ids = z.array(z.number().int().positive()).max(50).parse([...commandIds]);
+      const data = await request(
+        `/internal/agent/runs/${encodeURIComponent(id)}/control/ack`, {}, traceId,
+        z.object({ applied: z.number().int().nonnegative() }),
+        { method: "POST", body: { command_ids: ids } },
+      );
+      return data.applied;
+    },
     ensureChatStream: async (requestId, body, traceId) => {
       const id = chatRequestId(requestId);
       const data = await request(

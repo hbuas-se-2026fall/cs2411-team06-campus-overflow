@@ -624,3 +624,47 @@ class McpCallLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+
+
+class AgentRunControl(Base):
+    """运行控制状态（T-21A / RC-R01）：每个运行一行，revision 单调递增用于跨实例 fencing。
+
+    不设外键：运行归档删除后控制行保留短期审计价值，由清理任务单独收敛。
+    """
+
+    __tablename__ = "agent_run_controls"
+
+    agent_run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # running / paused / cancelling / cancelled
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pause_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AgentRunCommand(Base):
+    """运行控制命令（T-21A / RC-R01～R03）：追加式，消费后清空引导正文只留摘要。"""
+
+    __tablename__ = "agent_run_commands"
+    __table_args__ = (
+        Index("ix_agent_run_commands_run_status", "agent_run_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    # pause / resume / cancel / guidance
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    guidance_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    guidance_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # pending / applied / expired
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    requested_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

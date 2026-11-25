@@ -108,6 +108,7 @@ source_modules = [
     "app.modules.governance.service_execution_actions",
     "app.modules.governance.service_execution_jobs",
     "app.modules.governance.service_contexts",
+    "app.modules.governance.service_control",
     "app.modules.governance.router_contexts",
     "app.modules.discovery.service",
     "app.modules.discovery.router",
@@ -132,6 +133,7 @@ ignore_imports = [
     "app.modules.qa.repository -> app.modules.qa.models",
     "app.modules.interaction.repository -> app.modules.interaction.models",
     "app.modules.governance.repository -> app.modules.governance.models",
+    "app.modules.governance.repository_control -> app.modules.governance.models",
     "app.core.permissions -> app.modules.identity.models",
 ]
 
@@ -153,6 +155,8 @@ source_modules = [
     "app.modules.governance.service_execution_actions",
     "app.modules.governance.service_execution_jobs",
     "app.modules.governance.service_contexts",
+    "app.modules.governance.service_control",
+    "app.modules.governance.repository_control",
 ]
 forbidden_modules = ["fastapi"]
 

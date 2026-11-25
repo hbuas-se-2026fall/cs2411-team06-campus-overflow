@@ -12,13 +12,19 @@ from app.core.permissions import (
 )
 from app.core.response import ok
 from app.db.session import get_db
-from app.modules.governance import service_admin, service_internal, service_settings
+from app.modules.governance import (
+    service_admin,
+    service_control,
+    service_internal,
+    service_settings,
+)
 from app.modules.governance.schemas import (
     AppealCreateRequest,
     AppealResolveRequest,
     CaseResolveRequest,
     PlanParallelSettingUpdate,
 )
+from app.modules.governance.schemas_control import RunControlRequest, RunGuidanceRequest
 
 router = APIRouter(prefix="/api/governance", tags=["治理（审批中心）"])
 # 学生申诉提交路径：与前端 AppealFormView 既有契约一致（/api/appeals，蛇形字段）
@@ -132,6 +138,45 @@ def get_run_trace(
     """管理员：单运行完整调用链（运行 + 计划/步骤事件 + 工具调用 + 关联工单）。"""
     detail = service_admin.get_run_trace(db, agent_run_id)
     return ok(detail.model_dump())
+
+
+@router.get("/agent-runs/{agent_run_id}/control")
+def get_run_control(
+    agent_run_id: str,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：读取运行控制状态（暂停/继续/取消与引导回显）。"""
+    control = service_control.get_admin_control(db, agent_run_id)
+    return ok(control.model_dump(mode="json"))
+
+
+@router.post("/agent-runs/{agent_run_id}/control")
+def control_agent_run(
+    agent_run_id: str,
+    req: RunControlRequest,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：暂停/继续/取消治理任务或管理员聊天（RC-R01/R02）。"""
+    control = service_control.apply_control(
+        db, agent_run_id, req.action, req.expected_revision, admin.id,
+    )
+    return ok(control.model_dump(mode="json"), "控制命令已生效")
+
+
+@router.post("/agent-runs/{agent_run_id}/guidance")
+def add_agent_run_guidance(
+    agent_run_id: str,
+    req: RunGuidanceRequest,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：暂停期间追加引导词，继续后注入下一次模型调用（RC-R03）。"""
+    control = service_control.add_guidance(
+        db, agent_run_id, req.guidance_text, req.expected_revision, admin.id,
+    )
+    return ok(control.model_dump(mode="json"), "引导词已追加")
 
 
 # ---------- 系统运行开关（SA-07C / ADR-010） ----------

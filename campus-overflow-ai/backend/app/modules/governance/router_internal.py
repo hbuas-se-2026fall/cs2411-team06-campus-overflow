@@ -31,6 +31,7 @@ from app.core.response import ok
 from app.db.session import get_db
 from app.modules.governance import (
     service_approvals,
+    service_control,
     service_external,
     service_internal,
     service_scan,
@@ -66,6 +67,7 @@ from app.modules.governance.schemas import (
     ToolCallCreateRequest,
     ToolCallResponse,
 )
+from app.modules.governance.schemas_control import RunControlAckRequest
 from app.modules.governance.schemas_scan import (
     PatrolScanClaimRequest,
     PatrolScanCreateRequest,
@@ -606,6 +608,30 @@ def retract_patrol_note(note_id: int, db: DbSession, trace_id: ServiceAuth) -> d
     """撤回笔记：撤回后立即不再出现在注入候选中。"""
     note = service_internal.retract_patrol_note(db, note_id, trace_id)
     return ok(note.model_dump(mode="json"), "巡检笔记已撤回")
+
+
+@router.get("/runs/{agent_run_id}/control")
+def read_run_control(
+    agent_run_id: str,
+    db: DbSession,
+    trace_id: ServiceAuth,
+    since_revision: int = Query(0, ge=0),
+) -> dict:
+    """Agent 拉取控制状态与未消费命令（RC-R04）：关闭时返回空命令。"""
+    control = service_control.read_internal_control(db, agent_run_id, since_revision)
+    return ok(control.model_dump(mode="json"))
+
+
+@router.post("/runs/{agent_run_id}/control/ack")
+def ack_run_control(
+    agent_run_id: str,
+    req: RunControlAckRequest,
+    db: DbSession,
+    trace_id: ServiceAuth,
+) -> dict:
+    """Agent 标记控制命令已消费（RC-R02）：重复 ack 幂等。"""
+    applied = service_control.ack_internal_control(db, agent_run_id, req.command_ids)
+    return ok({"applied": applied}, "控制命令已确认")
 
 
 @router.post("/runs")

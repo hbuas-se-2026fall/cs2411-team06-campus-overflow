@@ -21,6 +21,7 @@ def test_incremental_migration_roundtrip(tmp_path):
             "agent_sandbox_events",
             # 由基线之后的迁移创建，不能在 stamp 前由 metadata 预建
             "system_settings", "moderation_marks", "mcp_call_logs",
+            "agent_run_controls", "agent_run_commands",
         }
     ])
     engine.dispose()

@@ -4,7 +4,7 @@ import { RepairBudgetError } from "../loop/repair-budget.js";
 import { PlanBudgetError } from "../loop/run-budget.js";
 import { SelfCheckError } from "../loop/self-check.js";
 import type { PlanList, PlanStep } from "../types/plan.js";
-import type { AuditClient, AuditEventInput, RunAttribution } from "./audit-client.js";
+import type { AuditClient, AuditEventInput, AuditEventType, RunAttribution } from "./audit-client.js";
 import type { RunContext } from "./run-context.js";
 
 export interface PlanAudit {
@@ -85,6 +85,11 @@ export class PersistentRunAudit implements PlanAudit {
     await this.serial(() => this.event({ event_type: "plan", plan_revision: this.revision + 1,
       steps: plan.steps.map((step) => ({ step_id: step.stepId, tool_name: step.toolName })) }));
     this.revision += 1;
+  }
+  /** 控制事件只记录发生与当时计划版本；引导正文不进入事件表。 */
+  async controlEvent(eventType: Extract<AuditEventType,
+    "control_pause" | "control_resume" | "control_cancel" | "control_guidance">): Promise<void> {
+    await this.serial(() => this.event({ event_type: eventType, plan_revision: this.revision }));
   }
   async beforeStep(step: PlanStep): Promise<void> {
     await this.serial(() => this.event({ event_type: "step_started", plan_revision: this.revision,

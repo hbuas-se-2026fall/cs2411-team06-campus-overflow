@@ -6,6 +6,7 @@ import type { LanguageModel } from "ai";
 import type { RunContext } from "../observability/run-context.js";
 import type { PlanAudit } from "../observability/persistent-audit.js";
 import type { InternalClient } from "../internal-client.js";
+import type { RunControlGate } from "../loop/run-control-gate.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { TaskType } from "../types/index.js";
 
@@ -25,6 +26,8 @@ export interface TaskContext {
   internalClient?: InternalClient;
   /** 请求级工具注册表（G-03 受控计划执行的白名单与能力集；无客户端时为空注册表） */
   toolRegistry?: ToolRegistry;
+  /** 运行中人工控制（T-21C）：仅治理扫描等可控制任务由入口注入。 */
+  runControl?: RunControlGate;
 }
 
 export interface TaskHandler<I = unknown> {

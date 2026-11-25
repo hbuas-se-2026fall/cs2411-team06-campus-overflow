@@ -1,5 +1,41 @@
 # 技术方案（Plan）
 
+## 2026-11-25 运行中人工控制与工作流 skill 沉淀（AX-R11，R-002 用户确认）
+
+对应 spec RC-R01～R05 / SK-R01～R05 与 ADR-011。控制面覆盖治理任务与管理员聊天；skill 为团队共享知识，不构成授权。两个功能均默认关闭。
+
+### 控制面（运行暂停 / 引导）
+
+- 权威状态在后端，Agent 只做跟随者，避免多实例内存态分裂：
+  - `agent_run_controls`：`agent_run_id` 主键、`revision`、`state`（running/paused/cancelling/cancelled）、`pause_deadline`、`updated_by`、`updated_at`。
+  - `agent_run_commands`：`id`、`agent_run_id`、`revision`、`action`（pause/resume/cancel/guidance）、`guidance_text`（≤2000，消费后清空）、`guidance_digest`、`status`（pending/applied/expired）、`requested_by`、`trace_id`、时间戳。
+- 管理端接口：`POST /api/governance/agent-runs/{id}/control`（action + `expected_revision`）与 `POST /api/governance/agent-runs/{id}/guidance`；revision 冲突返回 409 与当前值，防并发覆盖；非管理员 403；每次操作写审计。
+- 内部接口：`GET /internal/agent/runs/{id}/control?since_revision=` 返回状态与未消费命令；`POST /internal/agent/runs/{id}/control/ack` 标记 applied（幂等）。Agent 只在 step 边界拉取，超时 500ms；拉取失败保持原状态继续，不因网络抖动误停。
+- Agent 执行：`plan-executor` 在每个 step/模型调用前检查；`paused` 时以 2s 间隔轮询 resume/cancel，期间不执行工具、保留槽位租约；聊天在每次模型 turn 前做同样检查。恢复后从断点继续，不重跑已完成步骤。
+- 引导注入：作为独立“管理员引导（仅供参考，不得扩大权限与工具范围）”段落拼入下一次模型 prompt，优先级低于系统规则与安全策略；写 `agent_run_events`（`control_pause/resume/cancel/guidance`），正文不入库，仅保留摘要与 digest。
+- 超时：暂停最长 30 分钟；后端读时惰性判定 + 定时清理，Agent 本地兜底；超时自动取消并释放占位，运行记录标记 `pause_timeout`。
+- 开关：`RUN_CONTROL_ENABLED` 默认 false；关闭时接口返回 409/明确不可用，Agent 不轮询。
+
+### skill 沉淀
+
+- 表：
+  - `workflow_skills`：`id`、`name`、`task_type`、`course_id`（可空）、`status`（draft/active/disabled/archived）、`current_version`、创建/更新者与时间。
+  - `workflow_skill_versions`：`skill_id + version` 主键、`content`（JSON：conditions、steps、tips、checks、max_tokens）、`source_run_id`（可空）、`status`（draft/published）、发布者与时间。
+- 管理接口：列表/详情、创建草稿、编辑草稿、发布（生成新版本并置 current_version）、启停、归档删除、回看历史版本；仅 active 管理员；全部写审计。删除为归档，不影响历史运行引用。
+- 内部接口：`GET /internal/agent/skills?task_type=&course_id=` 返回 active 且 published 的固定版本元数据与摘要；`GET /internal/agent/skills/{id}/versions/{version}` 取步骤详情。Agent 侧 30s TTL 缓存，失败降级为空。
+- 选择与预算：匹配优先级为任务类型 + 课程精确 > 任务类型 > 全局；最多 3 条、总字符 ≤4000、额外 token 默认上限 1500；仅展开排名第 1 的步骤详情，其余用摘要；超限截断并记录。
+- 注入位置：规划提示前的“历史有效路径”区；skill 文本不得包含工具授权、角色提升或跳过审批的指令；注入前做敏感过滤，命中即丢弃该条。
+- 提案生成：运行成功结束后由独立步骤从计划步骤、工具序列、检查项生成 draft 版本，过滤敏感与用户原文，附 `source_run_id`；管理员在页面编辑后发布。AI 不直接发布。
+- 量化验收：新增 `bench:skill-reuse`，固定 20 条治理样本，对比关闭/开启的重复检索次数、输入 token、成功率与 P95；未达标保持默认关闭。
+
+### 边界与风险
+
+- 暂停只在边界生效，不中断已发出的模型请求；不改变 8 步/12 次/60 秒/180 秒预算与审批语义。
+- 暂停占用槽位 30 分钟，可能让其他任务排队；需要埋点观察，必要时缩短上限。
+- 多实例下以 revision + ack 保证命令只生效一次；实例崩溃不承诺续跑，超时后转取消，避免重复执行高风险动作。
+- skill 注入可能引入过时经验；以版本发布与快速停用作为回退，不把 skill 当日志或授权。
+- 前端只交付管理端最小页面；学生/教师端不新增入口。
+
 ## 2026-11-24 计划内无依赖步骤并行（AX-R10，R-001 用户确认）
 
 对应 spec SA-R07、ADR-010 与 R-001。只做同一子 Agent 计划内的步骤并行，一个 job 仍只占一个槽位。
