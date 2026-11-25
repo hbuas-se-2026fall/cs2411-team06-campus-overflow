@@ -36,6 +36,7 @@ from app.modules.governance import (
     service_internal,
     service_scan,
     service_settings,
+    service_skill,
     service_waits,
 )
 from app.modules.governance.schemas import (
@@ -252,6 +253,34 @@ DecisionAuth = Annotated[
 def get_runtime_config(db: DbSession, trace_id: ServiceAuth) -> dict:
     """Agent 只读运行配置（SA-07C / ADR-010）：当前仅计划内并行开关。"""
     return ok(service_settings.get_plan_parallel(db).model_dump(mode="json"))
+
+
+@router.get("/skills")
+def list_workflow_skills(
+    db: DbSession,
+    trace_id: ServiceAuth,
+    task_type: str = Query(..., min_length=1, max_length=40, description="任务类型"),
+    course_id: int | None = Query(None, ge=1, description="课程 id；为空仅返回全局 skill"),
+) -> dict:
+    """Agent 只读：active 且已发布固定版本的 skill 元数据与摘要（T-22C / SK-R03）。"""
+    items = service_skill.list_injectable_skills(
+        db, task_type=task_type, course_id=course_id
+    )
+    return ok({"items": items})
+
+
+@router.get("/skills/{skill_id}/versions/{version}")
+def get_workflow_skill_version(
+    skill_id: int,
+    version: int,
+    db: DbSession,
+    trace_id: ServiceAuth,
+) -> dict:
+    """Agent 只读：当前注入版本的步骤详情；停用或版本已切换返回 404。"""
+    detail = service_skill.get_injectable_version(db, skill_id, version)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="skill 版本不可用")
+    return ok(detail)
 
 
 @router.post("/mcp/calls")

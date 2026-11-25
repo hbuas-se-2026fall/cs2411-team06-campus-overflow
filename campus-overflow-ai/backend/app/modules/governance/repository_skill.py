@@ -3,7 +3,7 @@
 # 版本递增与发布在同一 skill 行锁内完成，避免并发覆盖；归档只改 status，不删版本。
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.governance.models import WorkflowSkill, WorkflowSkillVersion
@@ -218,6 +218,77 @@ def set_status(
     skill.updated_by = updated_by
     db.flush()
     return _skill_row(skill)
+
+
+def list_active_published(
+    db: Session, *, task_type: str, course_id: int | None = None,
+) -> list[dict]:
+    """内部注入只读：active 且 current_version 已发布的固定版本。
+
+    有 course_id 时返回「该课程 + 全局」，否则仅全局；不返回其他课程 skill。
+    """
+    conditions = [
+        WorkflowSkill.status == "active",
+        WorkflowSkill.current_version.is_not(None),
+        WorkflowSkill.task_type == task_type,
+        WorkflowSkillVersion.status == "published",
+    ]
+    if course_id is None:
+        conditions.append(WorkflowSkill.course_id.is_(None))
+    else:
+        conditions.append(
+            or_(WorkflowSkill.course_id.is_(None), WorkflowSkill.course_id == course_id)
+        )
+    rows = db.execute(
+        select(WorkflowSkill, WorkflowSkillVersion)
+        .join(
+            WorkflowSkillVersion,
+            and_(
+                WorkflowSkillVersion.skill_id == WorkflowSkill.id,
+                WorkflowSkillVersion.version == WorkflowSkill.current_version,
+            ),
+        )
+        .where(*conditions)
+        .order_by(WorkflowSkill.id.asc())
+    ).all()
+    return [
+        {
+            **_skill_row(skill),
+            "version": version.version,
+            "content": version.content,
+        }
+        for skill, version in rows
+    ]
+
+
+def get_active_published_version(
+    db: Session, skill_id: int, version: int,
+) -> dict | None:
+    """内部详情只读：只允许读取当前注入版本，避免发布切换期间读到半更新内容。"""
+    row = db.execute(
+        select(WorkflowSkill, WorkflowSkillVersion)
+        .join(
+            WorkflowSkillVersion,
+            and_(
+                WorkflowSkillVersion.skill_id == WorkflowSkill.id,
+                WorkflowSkillVersion.version == WorkflowSkill.current_version,
+            ),
+        )
+        .where(
+            WorkflowSkill.id == skill_id,
+            WorkflowSkill.status == "active",
+            WorkflowSkill.current_version == version,
+            WorkflowSkillVersion.status == "published",
+        )
+    ).first()
+    if row is None:
+        return None
+    _skill, stored = row
+    return {
+        "skill_id": stored.skill_id,
+        "version": stored.version,
+        "content": stored.content,
+    }
 
 
 def _lock_skill(db: Session, skill_id: int) -> WorkflowSkill | None:

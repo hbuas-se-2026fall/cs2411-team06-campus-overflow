@@ -8,6 +8,7 @@ import { executePlan, PlanExecutionError } from "./plan-executor.js";
 import { generatePlan } from "./plan-generator.js";
 import type { RunControlGate } from "./run-control-gate.js";
 import { readPlanParallelEnabled } from "../runtime-config.js";
+import { loadSkillInjection, type SkillSource } from "../skills/workflow-skills.js";
 import { COMMON_READ_TOOLS, roleActionNames } from "../auth/role-capabilities.js";
 
 const READ_TOOLS = [...COMMON_READ_TOOLS, ...roleActionNames("admin")];
@@ -40,6 +41,8 @@ interface PlanningContext {
   runContext: RunContext;
   toolRegistry?: ToolRegistry;
   runControl?: RunControlGate;
+  /** 工作流 skill 只读来源（T-22C）；缺省或关闭开关时不注入。 */
+  internalClient?: SkillSource;
 }
 
 /** 任务范围由服务端输入确定，模型不能通过省略或改写参数扩大查询。 */
@@ -72,6 +75,13 @@ export const runPlannedTools = async (
   // 模型调用前检查：暂停在此停住；引导词作为独立段落注入本次规划提示。
   await context.runControl?.checkpoint();
   const guidance = context.runControl?.takeGuidance() ?? [];
+  const courseId = typeof input.courseId === "number" ? input.courseId : undefined;
+  // 历史有效路径：默认关闭，失败降级为空，不阻塞计划生成（T-22C）
+  const skills = context.internalClient
+    ? await loadSkillInjection(
+      context.internalClient, kind, courseId, context.runContext.traceId,
+    )
+    : [];
   const plan = await generatePlan({
     model: context.model, registry, requiredTools,
     signal: context.runContext.signal,
@@ -83,7 +93,7 @@ export const runPlannedTools = async (
       "moderation_scan 必须用原 targetType/targetId，可引用 $input.targetType/$input.targetId",
       "关键词须符合工具长度约束，可提炼输入关键词；不得改变任务指定的课程或目标",
       ...(context.feedback?.length ? [`上一轮未通过：${context.feedback.join(",")}，请重新制定只读计划并修正结果`] : []),
-    ], guidance),
+    ], guidance, skills),
   });
   await context.audit?.recordPlan(plan);
   if (plan.steps.some(step => step.toolName === "searchWeb" || step.toolName === "readWebPage")) context.runContext.evidence.markWebRetrieval();

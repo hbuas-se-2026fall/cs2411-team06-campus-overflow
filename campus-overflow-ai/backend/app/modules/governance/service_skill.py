@@ -167,3 +167,54 @@ def _require_skill(db: Session, skill_id: int) -> dict:
 def _ensure_not_archived(skill: dict) -> None:
     if skill["status"] == "archived":
         raise domain.SkillStateError("已归档 skill 不可再修改")
+
+
+# ---------- 内部只读（T-22C / SK-R03）：Agent 规划前的历史有效路径 ----------
+
+
+def list_injectable_skills(
+    db: Session, *, task_type: str, course_id: int | None = None,
+) -> list[dict]:
+    """返回 active 且已发布固定版本的元数据与摘要；空结果表示无可注入 skill。"""
+    rows = repository_skill.list_active_published(
+        db, task_type=task_type, course_id=course_id
+    )
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "task_type": row["task_type"],
+            "course_id": row["course_id"],
+            "version": row["version"],
+            "summary": _skill_summary(row["content"]),
+            "step_count": len(_steps(row["content"])),
+        }
+        for row in rows
+    ]
+
+
+def get_injectable_version(
+    db: Session, skill_id: int, version: int,
+) -> dict | None:
+    """仅当前注入版本可读；skill 停用或已切换版本时返回 None。"""
+    row = repository_skill.get_active_published_version(db, skill_id, version)
+    if row is None:
+        return None
+    return {
+        "skill_id": row["skill_id"],
+        "version": row["version"],
+        "content": row["content"],
+    }
+
+
+def _steps(content: object) -> list[str]:
+    steps = content.get("steps") if isinstance(content, dict) else None
+    if not isinstance(steps, list):
+        return []
+    return [str(step) for step in steps]
+
+
+def _skill_summary(content: object) -> str:
+    """摘要只取前两步，降低列表响应体积；完整步骤走版本详情接口。"""
+    steps = _steps(content)
+    return ("；".join(steps[:2]) if steps else "（无步骤摘要）")[:200]
