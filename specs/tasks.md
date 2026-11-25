@@ -16,7 +16,7 @@
 ### T-22 长期工作流 skill 沉淀
 
 - [x] T-22A skill 表与迁移：新增 `workflow_skills` 与 `workflow_skill_versions`（含 content JSON、source_run_id、status、current_version），迁移 `sk01_workflow_skills`。验收：迁移可执行，版本唯一，归档不破坏历史引用。专项 4 项、迁移 `sk01_workflow_skills`、ruff、lint-imports 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-22A-skill表与迁移.md`。
-- [ ] T-22B 管理接口：列表/详情、创建草稿、编辑、发布（新版本并置 current_version）、启停、归档删除、历史版本；仅 active 管理员，全部审计。验收：pytest 覆盖权限、版本递增、归档与发布回滚。
+- [x] T-22B 管理接口：列表/详情、创建草稿、编辑、发布（新版本并置 current_version）、启停、归档删除、历史版本；仅 active 管理员，全部审计。验收：pytest 覆盖权限、版本递增、归档与发布回滚。专项 8 项、相邻治理回归 69 项、ruff、lint-imports 5 contracts 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-22B-管理接口.md`。
 - [ ] T-22C 内部读取与 Agent 注入：`GET /internal/agent/skills` 与版本详情；Agent 按任务类型/课程匹配，≤3 条、≤4000 字符、额外 token ≤1500，仅展开第 1 条详情，30s TTL，失败降级为空。验收：vitest 覆盖匹配优先级、截断、缓存过期与后端失败。
 - [ ] T-22D 提案生成：成功运行结束后从计划步骤/工具序列/检查项生成 draft 版本，过滤敏感与用户原文，附 `source_run_id`；AI 不可直接发布。验收：单测覆盖敏感过滤、来源关联与未发布不注入。
 - [ ] T-22E 管理端最小页面：skill 列表、编辑、发布/驳回、启停、归档删除与版本回看。验收：组件测试 + 手动走查。

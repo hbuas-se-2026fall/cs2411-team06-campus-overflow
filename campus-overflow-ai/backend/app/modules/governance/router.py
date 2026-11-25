@@ -17,6 +17,7 @@ from app.modules.governance import (
     service_control,
     service_internal,
     service_settings,
+    service_skill,
 )
 from app.modules.governance.schemas import (
     AppealCreateRequest,
@@ -25,6 +26,12 @@ from app.modules.governance.schemas import (
     PlanParallelSettingUpdate,
 )
 from app.modules.governance.schemas_control import RunControlRequest, RunGuidanceRequest
+from app.modules.governance.schemas_skill import (
+    SkillCreateRequest,
+    SkillPublishRequest,
+    SkillStatusRequest,
+    SkillUpdateRequest,
+)
 
 router = APIRouter(prefix="/api/governance", tags=["治理（审批中心）"])
 # 学生申诉提交路径：与前端 AppealFormView 既有契约一致（/api/appeals，蛇形字段）
@@ -232,3 +239,109 @@ def update_plan_parallel_setting(
     """管理员：切换计划内并行开关；Agent 下次配置刷新后生效。"""
     setting = service_settings.update_plan_parallel(db, req.plan_parallel_enabled, admin.id)
     return ok(setting.model_dump(mode="json"), "设置已更新")
+
+
+# ---------- 工作流 skill 管理（T-22B / SK-R01～R04） ----------
+
+
+@router.get("/skills")
+def list_skills(
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str | None = Query(None, description="draft/active/disabled/archived"),
+    task_type: str | None = Query(None, max_length=40, description="任务类型"),
+    course_id: int | None = Query(None, ge=1, description="课程限定"),
+) -> dict:
+    """管理员：skill 列表（状态/任务类型/课程筛选 + 分页）。"""
+    items, total = service_skill.list_skills(
+        db, page, page_size, status, task_type, course_id
+    )
+    return ok({
+        "items": [item.model_dump(mode="json") for item in items],
+        "total": total, "page": page, "page_size": page_size,
+    })
+
+
+@router.post("/skills")
+def create_skill(
+    req: SkillCreateRequest,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：创建 skill 草稿（生成 version 1，发布前不注入）。"""
+    skill = service_skill.create_skill(db, req, admin.id)
+    return ok(skill.model_dump(mode="json"), "skill 草稿已创建")
+
+
+@router.get("/skills/{skill_id}")
+def get_skill_detail(
+    skill_id: int,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：skill 详情与全部历史版本。"""
+    detail = service_skill.get_skill_detail(db, skill_id)
+    return ok(detail.model_dump(mode="json"))
+
+
+@router.put("/skills/{skill_id}")
+def update_skill(
+    skill_id: int,
+    req: SkillUpdateRequest,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：编辑元数据与草稿；已发布版本内容不变。"""
+    skill = service_skill.update_skill(db, skill_id, req, admin.id)
+    return ok(skill.model_dump(mode="json"), "skill 已更新")
+
+
+@router.get("/skills/{skill_id}/versions")
+def list_skill_versions(
+    skill_id: int,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：历史版本（含草稿与发布信息）。"""
+    versions = service_skill.list_skill_versions(db, skill_id)
+    return ok({
+        "items": [item.model_dump(mode="json") for item in versions],
+        "total": len(versions),
+    })
+
+
+@router.post("/skills/{skill_id}/publish")
+def publish_skill(
+    skill_id: int,
+    req: SkillPublishRequest,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：发布当前草稿；指定 version 时回滚到已发布版本。"""
+    skill = service_skill.publish_skill(db, skill_id, req, admin.id)
+    return ok(skill.model_dump(mode="json"), "skill 已发布")
+
+
+@router.post("/skills/{skill_id}/status")
+def set_skill_status(
+    skill_id: int,
+    req: SkillStatusRequest,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：启用或停用 skill（归档使用删除接口）。"""
+    skill = service_skill.set_skill_status(db, skill_id, req.status, admin.id)
+    return ok(skill.model_dump(mode="json"), "skill 状态已更新")
+
+
+@router.delete("/skills/{skill_id}")
+def archive_skill(
+    skill_id: int,
+    admin: UserPrincipal = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """管理员：归档 skill；历史版本与运行引用保留，不做物理删除。"""
+    skill = service_skill.archive_skill(db, skill_id, admin.id)
+    return ok(skill.model_dump(mode="json"), "skill 已归档")

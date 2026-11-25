@@ -189,6 +189,18 @@ class RunControlDisabledError(DomainError):
     http_status = 409
 
 
+class SkillNotFoundError(DomainError):
+    """工作流 skill 或其版本不存在（SK-R04）。"""
+
+    http_status = 404
+
+
+class SkillStateError(DomainError):
+    """skill 当前状态不允许该操作（归档后编辑、未发布启用、非法发布版本）。"""
+
+    http_status = 400
+
+
 class ReportSensitiveError(DomainError):
     """周报内容包含敏感信息（密钥/口令类原文），写入被拒绝（KN-R02 / C-07 精神）。"""
 
