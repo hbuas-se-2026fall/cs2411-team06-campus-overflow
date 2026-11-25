@@ -34,6 +34,8 @@ class Settings(BaseSettings):
 
     # 运行中人工控制（T-21 / RC-R01～R05）：暂停、继续、取消与引导注入；默认关闭
     run_control_enabled: bool = False
+    # 暂停超时定时清理间隔（T-21D）；<=0 关闭定时清理，仅保留读时惰性判定
+    run_control_cleanup_interval_seconds: int = 60
 
     # JWT 认证配置
     jwt_secret: str = "dev-jwt-secret-change-in-production"

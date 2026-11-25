@@ -12,6 +12,9 @@ export interface RunControlCommand {
   action: RunControlAction;
   guidance_text?: string | null;
   guidance_digest?: string | null;
+  /** 系统超时取消为 null；管理员取消为管理员 id */
+  requested_by?: number | null;
+  trace_id?: string;
 }
 
 export interface RunControlSnapshot {
@@ -129,6 +132,7 @@ export const createRunControlGate = (options: RunControlGateOptions): RunControl
   let pausedAt: number | null = null;
   let pauseAnnounced = false;
   let cancelAnnounced = false;
+  let pauseTimeoutCancel = false;
   let chain: Promise<void> = Promise.resolve();
 
   const emit = async (type: RunControlEventType): Promise<void> => {
@@ -150,6 +154,9 @@ export const createRunControlGate = (options: RunControlGateOptions): RunControl
           digest: command.guidance_digest ?? null,
         }));
         await emit("control_guidance");
+      } else if (command.action === "cancel" && command.requested_by == null) {
+        // 后端 30 分钟清理产生的系统取消：运行记录标记 pause_timeout
+        pauseTimeoutCancel = true;
       }
       // pause/resume/cancel 事件由本实例真正停住、恢复或终止时记录，
       // 避免“命令 + 状态”重复写入；其他实例已消费命令时也能按状态收敛。
@@ -187,13 +194,13 @@ export const createRunControlGate = (options: RunControlGateOptions): RunControl
     return snapshot;
   };
 
-  const cancelRun = async (): Promise<never> => {
+  const cancelRun = async (kind: "cancelled" | "pause_timeout" = "cancelled"): Promise<never> => {
     if (!cancelAnnounced) {
       cancelAnnounced = true;
       await emit("control_cancel");
     }
     options.onCancel();
-    throw new RunStoppedError("cancelled");
+    throw new RunStoppedError(kind);
   };
 
   const waitWhilePaused = async (initial: RunControlSnapshot): Promise<void> => {
@@ -208,10 +215,12 @@ export const createRunControlGate = (options: RunControlGateOptions): RunControl
     const deadline = Math.min(startedAt + pauseTimeoutMs, backendDeadline);
     while (true) {
       checkSignal(options.signal);
-      if (now() >= deadline) await cancelRun();
+      if (now() >= deadline) await cancelRun("pause_timeout");
       await sleep(pollIntervalMs, options.signal);
       const snapshot = await pollOnce();
-      if (snapshot?.state === "cancelled") await cancelRun();
+      if (snapshot?.state === "cancelled") {
+        await cancelRun(pauseTimeoutCancel ? "pause_timeout" : "cancelled");
+      }
       if (!snapshot || snapshot.enabled === false || snapshot.state === "running") {
         pausedAt = null;
         if (pauseAnnounced) {
@@ -226,7 +235,9 @@ export const createRunControlGate = (options: RunControlGateOptions): RunControl
   const checkpointInner = async (): Promise<void> => {
     const snapshot = await pollOnce();
     if (!snapshot || disabled) return;
-    if (snapshot.state === "cancelled") await cancelRun();
+    if (snapshot.state === "cancelled") {
+      await cancelRun(pauseTimeoutCancel ? "pause_timeout" : "cancelled");
+    }
     if (snapshot.state === "paused") await waitWhilePaused(snapshot);
   };
 

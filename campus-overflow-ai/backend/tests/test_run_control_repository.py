@@ -92,7 +92,34 @@ def test_expire_paused_runs_only_cancels_overdue(db_session: Session):
 
     changed = repo.expire_paused_runs(db_session, now=now + timedelta(minutes=31))
 
-    assert changed == 1
+    assert changed == ["overdue"]
     assert repo.get_control(db_session, "overdue")["state"] == "cancelled"
     assert repo.get_control(db_session, "overdue")["pause_deadline"] is None
     assert repo.get_control(db_session, "fresh")["state"] == "paused"
+    # 系统取消命令 requested_by 为空，Agent 据此把运行记录标记 pause_timeout
+    commands = repo.list_pending_commands(db_session, "overdue", 0)
+    assert [(row["action"], row["requested_by"], row["trace_id"]) for row in commands] == [
+        ("pause", 9, ""),
+        ("cancel", None, "system:pause_timeout"),
+    ]
+    assert repo.expire_paused_runs(db_session, now=now + timedelta(minutes=32)) == []
+
+
+def test_two_instances_ack_same_batch_only_once(db_session: Session):
+    """双实例共享状态：同一批命令只被一方消费（原子条件更新）。"""
+    first = repo.apply_action(
+        db_session, run_id="run-shared", action="pause", expected_revision=0, requested_by=9,
+    )
+    second = repo.apply_action(
+        db_session, run_id="run-shared", action="guidance", expected_revision=1,
+        requested_by=9, guidance_text="先看置顶帖",
+    )
+    db_session.commit()
+    ids = [first["command"]["id"], second["command"]["id"]]
+    engine = db_session.get_bind()
+    with Session(bind=engine) as worker_a, Session(bind=engine) as worker_b:
+        assert repo.ack_commands(worker_a, "run-shared", ids) == 2
+        worker_a.commit()
+        assert repo.ack_commands(worker_b, "run-shared", ids) == 0
+        worker_b.commit()
+    assert repo.list_pending_commands(db_session, "run-shared") == []

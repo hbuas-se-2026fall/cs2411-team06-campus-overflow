@@ -295,6 +295,8 @@ export const RunControlCommandSchema = z.object({
   action: z.enum(["pause", "resume", "cancel", "guidance"]),
   guidance_text: z.string().nullable().optional(),
   guidance_digest: z.string().nullable().optional(),
+  requested_by: z.number().int().nullable().optional(),
+  trace_id: z.string().optional(),
 });
 export type RunControlCommandItem = z.infer<typeof RunControlCommandSchema>;
 

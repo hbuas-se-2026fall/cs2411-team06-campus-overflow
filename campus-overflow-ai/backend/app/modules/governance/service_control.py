@@ -1,5 +1,7 @@
 # 运行控制服务（T-21B / RC-R01～R05）：管理端下发命令 + 内部 Agent 拉取与 ack。
 # 权威状态与 revision 在 repository_control；本层负责启用开关、范围校验与审计。
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -49,9 +51,28 @@ def _ensure_not_waiting_approval(db: Session, run_id: str) -> None:
         raise domain.RunControlStateError("审批等待中的运行不能暂停")
 
 
+def expire_paused_controls(db: Session, now: datetime | None = None) -> int:
+    """暂停超时收敛（T-21D）：自动取消并追加系统取消命令，返回本次处理数量。"""
+    expired = repository_control.expire_paused_runs(db, now)
+    if expired:
+        db.commit()
+        action_logger.info(
+            "run_control pause_timeout expired=%s runs=%s", len(expired), ",".join(expired),
+        )
+    return len(expired)
+
+
+def _expire_run_if_overdue(db: Session, run_id: str) -> None:
+    """读时惰性判定：只收敛当前运行，避免读接口每次都扫全表。"""
+    if repository_control.expire_paused_runs(db, run_id=run_id):
+        db.commit()
+        action_logger.info("run_control pause_timeout run_id=%s", run_id)
+
+
 def get_admin_control(db: Session, run_id: str) -> RunControlOut:
     """管理端回显当前控制状态；无记录时按运行中、版本 0 返回。"""
     _require_run(db, run_id)
+    _expire_run_if_overdue(db, run_id)
     control = repository_control.get_control(db, run_id)
     if control is None:
         return RunControlOut(agent_run_id=run_id, state="running", revision=0)
@@ -65,6 +86,7 @@ def apply_control(
     _ensure_enabled()
     run = _require_run(db, run_id)
     _ensure_target(db, run)
+    _expire_run_if_overdue(db, run_id)
     if action == "pause":
         _ensure_not_waiting_approval(db, run_id)
     result = _apply(db, run_id, action, expected_revision, admin_id)
@@ -82,6 +104,7 @@ def add_guidance(
     _ensure_enabled()
     run = _require_run(db, run_id)
     _ensure_target(db, run)
+    _expire_run_if_overdue(db, run_id)
     control = repository_control.get_control(db, run_id)
     if control is None or control["state"] != "paused":
         raise domain.RunControlStateError("仅暂停中的运行可以追加引导词")
@@ -122,6 +145,7 @@ def read_internal_control(
 ) -> InternalRunControlOut:
     """Agent 拉取控制状态与未消费命令；关闭时返回空命令，保持现状继续。"""
     _require_run(db, run_id)
+    _expire_run_if_overdue(db, run_id)
     control = repository_control.get_control(db, run_id)
     enabled = settings.run_control_enabled
     commands: list[RunCommandOut] = []

@@ -662,7 +662,8 @@ class AgentRunCommand(Base):
     guidance_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # pending / applied / expired
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
-    requested_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 空表示系统自动命令（暂停超时），非空为管理员 id
+    requested_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

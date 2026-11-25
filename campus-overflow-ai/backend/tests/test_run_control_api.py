@@ -80,6 +80,31 @@ def test_run_not_found(client: TestClient, db_session: Session) -> None:
     assert resp.status_code == 404
 
 
+def test_internal_read_lazily_expires_overdue_pause(
+    client: TestClient, db_session: Session,
+) -> None:
+    """暂停超过 30 分钟：Agent 拉取时惰性判定为 cancelled 并拿到系统取消命令。"""
+    from datetime import datetime, timedelta
+
+    from app.modules.governance import repository_control
+
+    admin = _create_user(db_session, "admin_lazy", role="admin")
+    _run(db_session, "run-lazy")
+    repository_control.apply_action(
+        db_session, run_id="run-lazy", action="pause", expected_revision=0,
+        requested_by=admin.id, now=datetime.now() - timedelta(minutes=31),
+    )
+    db_session.commit()
+
+    data = client.get(INTERNAL_URL.format("run-lazy"), headers=_service()).json()["data"]
+    assert data["state"] == "cancelled"
+    assert data["revision"] == 2
+    assert [(item["action"], item["requested_by"]) for item in data["commands"]] == [
+        ("pause", admin.id),
+        ("cancel", None),
+    ]
+
+
 def test_student_chat_not_controllable(client: TestClient, db_session: Session) -> None:
     """学生聊天与教学任务不可被管理员干预（RC-R05）。"""
     admin = _create_user(db_session, "admin_scope", role="admin")

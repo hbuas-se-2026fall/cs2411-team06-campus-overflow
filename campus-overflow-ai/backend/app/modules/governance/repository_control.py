@@ -7,7 +7,7 @@
 import hashlib
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.modules.governance.models import AgentRunCommand, AgentRunControl
@@ -116,42 +116,66 @@ def list_pending_commands(db: Session, run_id: str, since_revision: int = 0) -> 
 
 
 def ack_commands(db: Session, run_id: str, command_ids: list[int]) -> int:
-    """标记已消费并清空引导正文；重复 ack 不报错，返回本次实际更新数。"""
+    """原子标记已消费并清空引导正文；两实例并发时只有一方能更新成功。"""
     if not command_ids:
         return 0
-    rows = db.execute(
-        select(AgentRunCommand).where(
+    result = db.execute(
+        update(AgentRunCommand)
+        .where(
             AgentRunCommand.agent_run_id == run_id,
             AgentRunCommand.id.in_(command_ids),
             AgentRunCommand.status == "pending",
         )
-    ).scalars().all()
-    now = datetime.now()
-    for row in rows:
-        row.status = "applied"
-        row.applied_at = now
-        row.guidance_text = None
+        .values(status="applied", applied_at=datetime.now(), guidance_text=None)
+    )
     db.flush()
-    return len(rows)
+    return int(result.rowcount or 0)
 
 
-def expire_paused_runs(db: Session, now: datetime | None = None) -> int:
-    """超过暂停期限的运行自动取消；返回受影响数量，命令由后续接口补齐。"""
+def expire_paused_runs(
+    db: Session, now: datetime | None = None, *, run_id: str | None = None,
+) -> list[str]:
+    """超过暂停期限的运行自动取消并追加系统取消命令；返回本次实际取消的运行。
+
+    逐行条件更新保证多实例下同一个运行只被一方收敛；已被其他实例处理的跳过。
+    """
     current = now or datetime.now()
-    rows = db.execute(
-        select(AgentRunControl).where(
-            AgentRunControl.state == "paused",
-            AgentRunControl.pause_deadline.is_not(None),
-            AgentRunControl.pause_deadline < current,
-        )
+    overdue = [
+        AgentRunControl.state == "paused",
+        AgentRunControl.pause_deadline.is_not(None),
+        AgentRunControl.pause_deadline < current,
+    ]
+    if run_id is not None:
+        overdue.append(AgentRunControl.agent_run_id == run_id)
+    candidates = db.execute(
+        select(AgentRunControl.agent_run_id).where(*overdue)
     ).scalars().all()
-    for row in rows:
-        row.state = "cancelled"
-        row.pause_deadline = None
-        row.revision += 1
-        row.updated_at = current
+    expired: list[str] = []
+    for candidate in candidates:
+        result = db.execute(
+            update(AgentRunControl)
+            .where(AgentRunControl.agent_run_id == candidate, *overdue)
+            .values(
+                state="cancelled", pause_deadline=None,
+                revision=AgentRunControl.revision + 1,
+                updated_at=current, updated_by=None,
+            )
+        )
+        if result.rowcount != 1:
+            continue
+        revision = db.execute(
+            select(AgentRunControl.revision).where(
+                AgentRunControl.agent_run_id == candidate,
+            )
+        ).scalar_one()
+        db.add(AgentRunCommand(
+            agent_run_id=candidate, revision=revision, action="cancel",
+            guidance_text=None, guidance_digest=None, status="pending",
+            requested_by=None, trace_id="system:pause_timeout",
+        ))
+        expired.append(candidate)
     db.flush()
-    return len(rows)
+    return expired
 
 
 def _control_row(control: AgentRunControl) -> dict:

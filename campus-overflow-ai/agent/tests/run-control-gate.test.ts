@@ -99,7 +99,7 @@ describe("运行控制门（T-21C）", () => {
     expect(info).toHaveBeenCalled();
   });
 
-  it("暂停超过本地兜底（30 分钟）自动取消", async () => {
+  it("暂停超过本地兜底（30 分钟）自动取消并标记 pause_timeout", async () => {
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     let clock = 0;
     const fake = fakeClient([
@@ -112,7 +112,33 @@ describe("运行控制门（T-21C）", () => {
       onCancel: vi.fn(), pauseTimeoutMs: 100, now: () => (clock += 60),
       sleep: async () => undefined,
     });
-    await expect(gate.checkpoint()).rejects.toBeInstanceOf(RunStoppedError);
+    await expect(gate.checkpoint()).rejects.toMatchObject({
+      kind: "pause_timeout", summary: "暂停超时，任务已取消",
+    });
+  });
+
+  it("后端系统取消命令同样标记 pause_timeout，管理员取消保持 cancelled", async () => {
+    const system = fakeClient([
+      snapshot({ state: "cancelled", revision: 2, commands: [
+        { id: 1, revision: 2, action: "cancel", requested_by: null, trace_id: "system:pause_timeout" },
+      ] }),
+    ]);
+    const systemGate = createRunControlGate({
+      client: system.client, agentRunId: "run-1", traceId: "trace-1" as never,
+      onCancel: vi.fn(),
+    });
+    await expect(systemGate.checkpoint()).rejects.toMatchObject({ kind: "pause_timeout" });
+
+    const admin = fakeClient([
+      snapshot({ state: "cancelled", revision: 2, commands: [
+        { id: 1, revision: 2, action: "cancel", requested_by: 9, trace_id: "admin-9" },
+      ] }),
+    ]);
+    const adminGate = createRunControlGate({
+      client: admin.client, agentRunId: "run-1", traceId: "trace-1" as never,
+      onCancel: vi.fn(),
+    });
+    await expect(adminGate.checkpoint()).rejects.toMatchObject({ kind: "cancelled" });
   });
 
   it("拉取失败不误停：保持运行并继续后续检查", async () => {
