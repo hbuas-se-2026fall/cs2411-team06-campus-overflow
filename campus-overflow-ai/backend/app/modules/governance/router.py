@@ -2,7 +2,9 @@
 # 管理端治理接口（/api/governance/*，管理员）+ 学生申诉提交（/api/appeals，登录用户）。
 # 处置动作复用 T-16 扩展的双环状态机与真实执行（hide/delete/ban/skip）；
 # 分层基线 D-2/D-9：本层只收参调 service_admin，不 import models、不触碰 ORM。
-from fastapi import APIRouter, Depends, Query
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.orm import Session
 
 from app.core.permissions import (
@@ -164,10 +166,12 @@ def control_agent_run(
     req: RunControlRequest,
     admin: UserPrincipal = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
+    x_trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
 ) -> dict:
     """管理员：暂停/继续/取消治理任务或管理员聊天（RC-R01/R02）。"""
     control = service_control.apply_control(
         db, agent_run_id, req.action, req.expected_revision, admin.id,
+        trace_id=(x_trace_id or "").strip() or uuid4().hex,
     )
     return ok(control.model_dump(mode="json"), "控制命令已生效")
 
@@ -178,10 +182,12 @@ def add_agent_run_guidance(
     req: RunGuidanceRequest,
     admin: UserPrincipal = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
+    x_trace_id: str | None = Header(default=None, alias="X-Trace-Id"),
 ) -> dict:
     """管理员：暂停期间追加引导词，继续后注入下一次模型调用（RC-R03）。"""
     control = service_control.add_guidance(
         db, agent_run_id, req.guidance_text, req.expected_revision, admin.id,
+        trace_id=(x_trace_id or "").strip() or uuid4().hex,
     )
     return ok(control.model_dump(mode="json"), "引导词已追加")
 

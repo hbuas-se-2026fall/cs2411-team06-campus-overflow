@@ -14,6 +14,12 @@ from app.modules.governance.models import AgentRunCommand, AgentRunControl
 
 PAUSE_TIMEOUT_MINUTES = 30
 VALID_ACTIONS = ("pause", "resume", "cancel", "guidance")
+# 控制状态机：cancelled 是终态，任何动作都不能把它改回非终态。
+LEGAL_ACTIONS: dict[str, frozenset[str]] = {
+    "running": frozenset({"pause", "cancel"}),
+    "paused": frozenset({"resume", "cancel", "guidance"}),
+    "cancelled": frozenset(),
+}
 
 
 class RevisionConflict(Exception):
@@ -22,6 +28,15 @@ class RevisionConflict(Exception):
     def __init__(self, current_revision: int):
         self.current_revision = current_revision
         super().__init__(f"revision 冲突，当前为 {current_revision}")
+
+
+class InvalidTransition(Exception):
+    """当前状态不允许该动作：终态不可逆，暂停/继续不可重复。"""
+
+    def __init__(self, current_state: str, action: str):
+        self.current_state = current_state
+        self.action = action
+        super().__init__(f"状态 {current_state} 不允许执行 {action}")
 
 
 def get_or_create_control(db: Session, run_id: str) -> AgentRunControl:
@@ -70,6 +85,8 @@ def apply_action(
         db.flush()
     if control.revision != expected_revision:
         raise RevisionConflict(control.revision)
+    if action not in LEGAL_ACTIONS.get(control.state, frozenset()):
+        raise InvalidTransition(control.state, action)
 
     if action == "pause":
         control.state = "paused"

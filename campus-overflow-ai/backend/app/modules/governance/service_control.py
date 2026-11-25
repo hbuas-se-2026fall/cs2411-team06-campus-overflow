@@ -81,15 +81,16 @@ def get_admin_control(db: Session, run_id: str) -> RunControlOut:
 
 def apply_control(
     db: Session, run_id: str, action: str, expected_revision: int, admin_id: int,
+    trace_id: str = "",
 ) -> RunControlOut:
-    """暂停 / 继续 / 取消：revision 不匹配返回 409，成功后写审计。"""
+    """暂停 / 继续 / 取消：revision 不匹配返回 409，终态不可逆，成功后写审计。"""
     _ensure_enabled()
     run = _require_run(db, run_id)
     _ensure_target(db, run)
     _expire_run_if_overdue(db, run_id)
     if action == "pause":
         _ensure_not_waiting_approval(db, run_id)
-    result = _apply(db, run_id, action, expected_revision, admin_id)
+    result = _apply(db, run_id, action, expected_revision, admin_id, trace_id=trace_id)
     action_logger.info(
         "run_control action=%s run_id=%s revision=%s admin_id=%s",
         action, run_id, result["control"]["revision"], admin_id,
@@ -99,6 +100,7 @@ def apply_control(
 
 def add_guidance(
     db: Session, run_id: str, guidance_text: str, expected_revision: int, admin_id: int,
+    trace_id: str = "",
 ) -> RunControlOut:
     """暂停期间追加引导词；正文只在下发前保留，ack 后仅留 digest。"""
     _ensure_enabled()
@@ -106,10 +108,13 @@ def add_guidance(
     _ensure_target(db, run)
     _expire_run_if_overdue(db, run_id)
     control = repository_control.get_control(db, run_id)
+    if control is not None and control["state"] == "cancelled":
+        raise domain.RunControlTransitionError("cancelled", "guidance")
     if control is None or control["state"] != "paused":
         raise domain.RunControlStateError("仅暂停中的运行可以追加引导词")
     result = _apply(
-        db, run_id, "guidance", expected_revision, admin_id, guidance_text=guidance_text,
+        db, run_id, "guidance", expected_revision, admin_id,
+        guidance_text=guidance_text, trace_id=trace_id,
     )
     action_logger.info(
         "run_control action=guidance run_id=%s revision=%s admin_id=%s digest=%s",
@@ -121,7 +126,7 @@ def add_guidance(
 
 def _apply(
     db: Session, run_id: str, action: str, expected_revision: int, admin_id: int,
-    guidance_text: str | None = None,
+    guidance_text: str | None = None, trace_id: str = "",
 ) -> dict:
     try:
         result = repository_control.apply_action(
@@ -130,12 +135,15 @@ def _apply(
             action=action,
             expected_revision=expected_revision,
             requested_by=admin_id,
-            trace_id=f"admin-{admin_id}",
+            trace_id=trace_id,
             guidance_text=guidance_text,
         )
     except repository_control.RevisionConflict as exc:
         db.rollback()
         raise domain.RunControlConflictError(exc.current_revision) from exc
+    except repository_control.InvalidTransition as exc:
+        db.rollback()
+        raise domain.RunControlTransitionError(exc.current_state, exc.action) from exc
     db.commit()
     return result
 

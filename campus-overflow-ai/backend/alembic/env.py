@@ -17,7 +17,8 @@ from app.db.base import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # 同一进程内跑迁移（测试）时不能禁用应用既有 logger，否则后续审计日志被静默丢弃
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # 数据库连接以应用配置为准（支持 BACKEND_DATABASE_URL 环境变量覆盖）
 config.set_main_option("sqlalchemy.url", settings.database_url)

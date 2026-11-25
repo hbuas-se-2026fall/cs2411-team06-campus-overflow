@@ -52,6 +52,47 @@ def test_guidance_keeps_state_and_records_digest(db_session: Session):
     assert result["command"]["guidance_text"] == "优先复核课程公告"
 
 
+def test_cancelled_is_terminal(db_session: Session):
+    """取消是终态：后续 resume/pause/guidance 都不能改回非终态。"""
+    repo.apply_action(
+        db_session, run_id="run-1", action="pause", expected_revision=0, requested_by=9,
+    )
+    repo.apply_action(
+        db_session, run_id="run-1", action="cancel", expected_revision=1, requested_by=9,
+    )
+
+    for action, guidance in (("resume", None), ("pause", None), ("guidance", "再试一次")):
+        with pytest.raises(repo.InvalidTransition) as exc:
+            repo.apply_action(
+                db_session, run_id="run-1", action=action, expected_revision=2,
+                requested_by=9, guidance_text=guidance,
+            )
+        assert exc.value.current_state == "cancelled"
+        assert exc.value.action == action
+
+    control = repo.get_control(db_session, "run-1")
+    assert control["state"] == "cancelled"
+    assert control["revision"] == 2
+    assert repo.list_pending_commands(db_session, "run-1")[-1]["action"] == "cancel"
+
+
+def test_duplicate_pause_and_resume_without_pause_rejected(db_session: Session):
+    """状态机不允许重复暂停，也不允许未暂停时继续。"""
+    with pytest.raises(repo.InvalidTransition):
+        repo.apply_action(
+            db_session, run_id="run-1", action="resume", expected_revision=0, requested_by=9,
+        )
+
+    repo.apply_action(
+        db_session, run_id="run-1", action="pause", expected_revision=0, requested_by=9,
+    )
+    with pytest.raises(repo.InvalidTransition):
+        repo.apply_action(
+            db_session, run_id="run-1", action="pause", expected_revision=1, requested_by=9,
+        )
+    assert repo.get_control(db_session, "run-1")["revision"] == 1
+
+
 def test_list_and_ack_commands_is_idempotent(db_session: Session):
     first = repo.apply_action(
         db_session, run_id="run-1", action="pause", expected_revision=0, requested_by=9,

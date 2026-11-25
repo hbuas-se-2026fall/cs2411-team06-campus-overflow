@@ -223,6 +223,74 @@ def test_guidance_requires_paused(client: TestClient, db_session: Session) -> No
     assert "仅暂停中的运行" in resp.json()["message"]
 
 
+def test_cancelled_run_cannot_resume_pause_or_guide(
+    client: TestClient, db_session: Session,
+) -> None:
+    """取消是终态：后续 resume/pause/guidance 均返回 409，状态保持不变。"""
+    admin = _create_user(db_session, "admin_terminal", role="admin")
+    _run(db_session, "run-terminal")
+    headers = _auth(admin)
+    cancelled = client.post(
+        CONTROL_URL.format("run-terminal"), headers=headers,
+        json={"action": "cancel", "expected_revision": 0},
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["data"]["state"] == "cancelled"
+
+    for action in ("resume", "pause"):
+        resp = client.post(
+            CONTROL_URL.format("run-terminal"), headers=headers,
+            json={"action": action, "expected_revision": 1},
+        )
+        assert resp.status_code == 409
+        assert "已取消" in resp.json()["message"]
+
+    guided = client.post(
+        GUIDANCE_URL.format("run-terminal"), headers=headers,
+        json={"guidance_text": "再试一次", "expected_revision": 1},
+    )
+    assert guided.status_code == 409
+    assert "已取消" in guided.json()["message"]
+
+    current = client.get(CONTROL_URL.format("run-terminal"), headers=headers).json()["data"]
+    assert current["state"] == "cancelled"
+    assert current["revision"] == 1
+
+
+def test_control_trace_id_uses_request_header(
+    client: TestClient, db_session: Session,
+) -> None:
+    """控制命令透传真实请求 trace，不再伪造 admin-{id}。"""
+    admin = _create_user(db_session, "admin_trace", role="admin")
+    _run(db_session, "run-trace")
+    headers = {**_auth(admin), "X-Trace-Id": "trace-request-9"}
+
+    assert client.post(
+        CONTROL_URL.format("run-trace"), headers=headers,
+        json={"action": "pause", "expected_revision": 0},
+    ).status_code == 200
+    assert client.post(
+        GUIDANCE_URL.format("run-trace"), headers={**headers, "X-Trace-Id": "trace-request-10"},
+        json={"guidance_text": "先核对来源", "expected_revision": 1},
+    ).status_code == 200
+
+    commands = client.get(
+        INTERNAL_URL.format("run-trace"), headers=_service(),
+    ).json()["data"]["commands"]
+    assert [cmd["trace_id"] for cmd in commands] == ["trace-request-9", "trace-request-10"]
+
+    _run(db_session, "run-trace-fallback")
+    assert client.post(
+        CONTROL_URL.format("run-trace-fallback"), headers=_auth(admin),
+        json={"action": "pause", "expected_revision": 0},
+    ).status_code == 200
+    fallback = client.get(
+        INTERNAL_URL.format("run-trace-fallback"), headers=_service(),
+    ).json()["data"]["commands"][0]["trace_id"]
+    assert fallback
+    assert fallback != f"admin-{admin.id}"
+
+
 def test_internal_control_requires_service_token(client: TestClient, db_session: Session) -> None:
     _run(db_session, "run-token")
     assert client.get(INTERNAL_URL.format("run-token")).status_code == 401

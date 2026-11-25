@@ -153,4 +153,50 @@ describe("运行控制门（T-21C）", () => {
     expect(events).toEqual([]);
     expect(fake.getRunControl).toHaveBeenCalledTimes(2);
   });
+
+  it("暂停期间网络失败保持暂停，只有后端明确 running 才恢复", async () => {
+    const fake = fakeClient([
+      snapshot({ state: "paused", revision: 1, commands: [{ id: 1, revision: 1, action: "pause" }] }),
+      new Error("network down"),
+      snapshot({ state: "paused", revision: 1 }),
+      snapshot({ state: "running", revision: 2, commands: [{ id: 2, revision: 2, action: "resume" }] }),
+    ]);
+    const events: string[] = [];
+    const gate = createRunControlGate({
+      client: fake.client, agentRunId: "run-1", traceId: "trace-1" as never,
+      onCancel: vi.fn(), recordEvent: async (type) => { events.push(type); },
+      sleep: async () => undefined, pauseTimeoutMs: 60_000,
+    });
+
+    await gate.checkpoint();
+
+    expect(events).toEqual(["control_pause", "control_resume"]);
+    expect(fake.getRunControl).toHaveBeenCalledTimes(4);
+  });
+
+  it("暂停期间拉取超时保持暂停，超时结果不当作恢复", async () => {
+    let calls = 0;
+    const getRunControl = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return snapshot({ state: "paused", revision: 1 });
+      if (calls === 2) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return snapshot({ state: "running", revision: 2 });
+      }
+      return snapshot({ state: "running", revision: 2 });
+    });
+    const ackRunControl = vi.fn(async (_runId: string, ids: readonly number[]) => ids.length);
+    const events: string[] = [];
+    const gate = createRunControlGate({
+      client: { getRunControl, ackRunControl } as RunControlClient,
+      agentRunId: "run-1", traceId: "trace-1" as never,
+      onCancel: vi.fn(), recordEvent: async (type) => { events.push(type); },
+      sleep: async () => undefined, requestTimeoutMs: 5, pauseTimeoutMs: 60_000,
+    });
+
+    await gate.checkpoint();
+
+    expect(events).toEqual(["control_pause", "control_resume"]);
+    expect(getRunControl).toHaveBeenCalledTimes(3);
+  });
 });

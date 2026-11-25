@@ -12,6 +12,7 @@
 - [x] T-21D 超时与跨实例收敛：暂停超过 30 分钟由后端惰性判定 + 定时清理自动取消并释放占位，Agent 本地兜底；两实例共享同一状态，命令只被消费一次。验收：假时钟测试 + 双实例并发 ack 测试。后端四文件 84 项、ruff、lint-imports 5 contracts、迁移 `rc02_system_commands`；Agent 控制专项 7 项、相邻回归 48 项、typecheck/eslint 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-21D-超时收敛与跨实例.md`。
 - [x] T-21E 管理端最小页面：运行详情内暂停/继续/取消、引导词输入与状态回显；加载/空/错误状态齐全，交互有审计提示。验收：组件测试 + 手动走查。组件专项 8 项、相邻回归 11 项、tsc、eslint、check:rules 通过；手动走查待人工审查；见 `docs/审查记录/运行控制与skill/T-21E-管理端控制页.md`。
 - [x] T-21F 验收收口：关闭 `RUN_CONTROL_ENABLED` 时行为与现状一致；开启后回归预算（8 步/12 次/60 秒/180 秒）、审批与取消语义不变；status 与审查记录同步。Agent 关闭态 8 文件 158 项、开启态核心 5 文件 118 项、后端控制 71 项、typecheck/eslint 通过；真实环境手动走查待人工审查；见 `docs/审查记录/运行控制与skill/T-21F-开关关闭与回归收口.md`。
+- [x] 评审修复（T-21C/D、T-22A 范围）：暂停期间控制轮询失败/超时保持暂停，不再把空快照当成恢复；`cancelled` 为终态，后续 resume/pause/guidance 返回 409；控制命令透传真实 `X-Trace-Id`，不再伪造 `admin-{id}`；skill 两表纳入迁移基线排除集，并修复 Alembic 同进程迁移禁用应用 logger。后端全量 912 passed / 29 skipped，Agent 控制专项 26 项、typecheck/eslint、ruff、lint-imports 通过；见 `docs/审查记录/运行控制与skill/T-21-评审问题修复.md`。
 
 ### T-22 长期工作流 skill 沉淀
 

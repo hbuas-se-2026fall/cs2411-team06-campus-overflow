@@ -183,6 +183,25 @@ class RunControlConflictError(DomainError):
         super().__init__(f"控制命令版本冲突，当前版本为 {current_revision}")
 
 
+class RunControlTransitionError(DomainError):
+    """当前控制状态不允许该动作：取消是终态，暂停/继续不可重复（T-21 修复）。"""
+
+    http_status = 409
+
+    def __init__(self, current_state: str, action: str) -> None:
+        self.current_state = current_state
+        self.action = action
+        if current_state == "cancelled":
+            message = "运行已取消，不能再次暂停、继续或追加引导"
+        elif current_state == "paused" and action == "pause":
+            message = "运行已处于暂停状态，不能重复暂停"
+        elif current_state == "running" and action == "resume":
+            message = "运行未暂停，无需继续"
+        else:
+            message = f"当前运行状态 {current_state} 不允许执行 {action}"
+        super().__init__(message)
+
+
 class RunControlDisabledError(DomainError):
     """运行控制功能未启用（默认关闭，T-21F）。"""
 

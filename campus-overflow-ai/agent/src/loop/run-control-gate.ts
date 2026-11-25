@@ -218,10 +218,12 @@ export const createRunControlGate = (options: RunControlGateOptions): RunControl
       if (now() >= deadline) await cancelRun("pause_timeout");
       await sleep(pollIntervalMs, options.signal);
       const snapshot = await pollOnce();
-      if (snapshot?.state === "cancelled") {
+      // 拉取超时或网络失败返回 null：必须保持暂停，不能把空快照当成恢复。
+      if (!snapshot) continue;
+      if (snapshot.state === "cancelled") {
         await cancelRun(pauseTimeoutCancel ? "pause_timeout" : "cancelled");
       }
-      if (!snapshot || snapshot.enabled === false || snapshot.state === "running") {
+      if (!snapshot.enabled || snapshot.state === "running") {
         pausedAt = null;
         if (pauseAnnounced) {
           pauseAnnounced = false;
