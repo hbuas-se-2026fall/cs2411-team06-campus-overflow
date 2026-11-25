@@ -33,11 +33,19 @@ export class PersistentRunAudit implements PlanAudit {
   private terminalAttempted = false;
   private revision = 0;
   private sequence = 0;
+  /** 审计事件必须按 sequence 严格递增写入；并行工具调用共享同一串行队列（ADR-010）。 */
+  private queue: Promise<unknown> = Promise.resolve();
   constructor(
     private readonly client: AuditClient,
     readonly run: RunContext,
     private readonly attribution?: RunAttribution,
   ) {}
+
+  private serial<T>(action: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(action, action);
+    this.queue = next.then(() => undefined, () => undefined);
+    return next;
+  }
 
   private async persist<T>(phase: string, action: () => Promise<T>, detached = false): Promise<T> {
     try { return await waitForSignal(detached ? undefined : this.run.signal, action); }
@@ -74,22 +82,22 @@ export class PersistentRunAudit implements PlanAudit {
     });
   }
   async recordPlan(plan: PlanList): Promise<void> {
-    await this.event({ event_type: "plan", plan_revision: this.revision + 1,
-      steps: plan.steps.map((step) => ({ step_id: step.stepId, tool_name: step.toolName })) });
+    await this.serial(() => this.event({ event_type: "plan", plan_revision: this.revision + 1,
+      steps: plan.steps.map((step) => ({ step_id: step.stepId, tool_name: step.toolName })) }));
     this.revision += 1;
   }
   async beforeStep(step: PlanStep): Promise<void> {
-    await this.event({ event_type: "step_started", plan_revision: this.revision,
-      step_id: step.stepId, tool_name: step.toolName });
+    await this.serial(() => this.event({ event_type: "step_started", plan_revision: this.revision,
+      step_id: step.stepId, tool_name: step.toolName }));
   }
   async afterStep(step: PlanStep, status: "succeeded" | "failed", durationMs: number): Promise<void> {
-    await this.event({ event_type: status === "succeeded" ? "step_succeeded" : "step_failed",
-      plan_revision: this.revision, step_id: step.stepId, tool_name: step.toolName, duration_ms: durationMs });
+    await this.serial(() => this.event({ event_type: status === "succeeded" ? "step_succeeded" : "step_failed",
+      plan_revision: this.revision, step_id: step.stepId, tool_name: step.toolName, duration_ms: durationMs }));
   }
   async finish(status: "succeeded" | "failed", failure?: unknown): Promise<void> {
     if (status === "succeeded") checkSignal(this.run.signal);
     this.terminalAttempted = true;
-    await this.persist("finish", async () => {
+    await this.serial(() => this.persist("finish", async () => {
       const body = { status, ...(status === "succeeded" ? { output_summary: "任务已完成" }
         : { error_summary: failureSummary(failure) }) };
       const result = status === "succeeded"
@@ -98,7 +106,7 @@ export class PersistentRunAudit implements PlanAudit {
           this.client.finishRun(this.run.agentRunId, body, this.run.traceId, signal), 5_000);
       this.checkAck(result);
       if (result.status !== status || result.user_id !== this.run.principal?.user_id) throw new Error("审计终态错配");
-    }, status === "failed");
+    }, status === "failed"));
   }
   async onFailure(original: unknown): Promise<unknown> {
     if (this.created && !this.terminalAttempted) {

@@ -3,6 +3,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { createApp } from "../src/app.js";
 import type { UserInternalClient } from "../src/internal-client.js";
 import { auditStub } from "./helpers/audit-stub.js";
+import { chatStreamStub } from "./helpers/chat-stream-stub.js";
 import { approvedReview } from "./helpers/review-response.js";
 
 const usage = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
@@ -24,8 +25,8 @@ const fixture = (text: string) => {
     ] }) };
   });
   const model = new MockLanguageModelV4({ doGenerate: generate, doStream: stream });
-  const client = { audit: auditStub(1), resolvePrincipal: vi.fn().mockResolvedValue({ user_id: 1, role: "student", status: "active",
-    identity_type: "undergraduate", assistant_cert_status: "none" }) } as unknown as UserInternalClient;
+  const client = chatStreamStub().apply({ audit: auditStub(1), resolvePrincipal: vi.fn().mockResolvedValue({ user_id: 1, role: "student", status: "active",
+    identity_type: "undergraduate", assistant_cert_status: "none" }) }) as unknown as UserInternalClient;
   const app = createApp({ getModel: () => model, createClient: () => client, webTools: {
     config: { enabled: true, browserEnabled: true, apiKey: "CANARY_SERVICE_KEY_NOT_MODEL_DATA" },
     search: async () => { order.push("search"); return [source]; },

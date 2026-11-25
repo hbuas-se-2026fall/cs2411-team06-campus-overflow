@@ -1,9 +1,13 @@
 // 浏览器个人记忆（T-14，AG-R04 / Q-10 定案）：localStorage 按账号命名空间隔离，
 // 用户手动维护（新增/删除/清空），AI 只读（buildMemoryContext 注入助手）。
+// M-03：用户可开启“AI 自动更新记忆”，助手回答后把候选写入本命名空间；
+// 写入仍走同一敏感过滤与容量约束，可随时关闭或清空。
 // 敏感信息写入拦截（X-06）：命中密钥/口令类关键词即拒绝，拦截原因不含原文；
 // 浏览器内容不构成后端授权，不云同步、不提供他人读取。
 
 export const MEMORY_KEY_PREFIX = "co_memory_user_";
+/** AI 自动更新开关（按账号隔离；默认开启，用户可在个人中心关闭） */
+export const MEMORY_AUTO_KEY_PREFIX = "co_memory_auto_user_";
 export const MEMORY_MAX_ENTRIES = 50;
 export const MEMORY_CONTENT_MAX_LEN = 500;
 /** 注入 AI 请求的上下文条数上限（与 Agent 聊天契约 browser_memory ≤20 对齐） */
@@ -108,6 +112,41 @@ export const removeMemoryEntry = (userId: number, entryId: string): MemoryEntry[
 export const clearMemoryEntries = (userId: number): void => {
   window.localStorage.removeItem(namespaceKey(userId));
   announceMemoryChange(userId);
+};
+
+/** AI 自动更新开关：未设置时默认开启；关闭后助手不再自动写入（已有记忆保留） */
+export const isMemoryAutoUpdateEnabled = (userId: number): boolean => {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(`${MEMORY_AUTO_KEY_PREFIX}${userId}`) !== "off";
+};
+
+export const setMemoryAutoUpdateEnabled = (userId: number, enabled: boolean): void => {
+  window.localStorage.setItem(`${MEMORY_AUTO_KEY_PREFIX}${userId}`, enabled ? "on" : "off");
+};
+
+/**
+ * 应用 AI 建议的记忆（M-03）：逐条做与手动新增相同的约束与敏感过滤，
+ * 全部校验后一次性写入并只广播一次变更，避免打断正在进行的对话。
+ * 返回实际写入条数与写入后全量。
+ */
+export const applySuggestedMemoryEntries = (
+  userId: number,
+  contents: readonly string[],
+): { added: string[]; entries: MemoryEntry[] } => {
+  const entries = readEntries(userId);
+  const existing = new Set(entries.map((entry) => entry.content));
+  const added: string[] = [];
+  for (const raw of contents) {
+    const text = raw.trim();
+    if (!text || text.length > MEMORY_CONTENT_MAX_LEN) continue;
+    if (isSensitiveContent(text) || existing.has(text)) continue;
+    if (entries.length >= MEMORY_MAX_ENTRIES) break;
+    entries.push({ id: crypto.randomUUID(), content: text, created_at: new Date().toISOString() });
+    existing.add(text);
+    added.push(text);
+  }
+  if (added.length > 0) writeEntries(userId, entries);
+  return { added, entries: listMemoryEntries(userId) };
 };
 
 /** AI 请求上下文注入助手：最新 20 条内容（与 Agent browser_memory ≤20 契约对齐）。

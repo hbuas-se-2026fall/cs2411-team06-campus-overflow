@@ -22,7 +22,8 @@ def _case(db: Session, **overrides) -> ModerationCase:
         "status": "rejected",
         "resolution": "skip",
         "decision_source": "manager_directed",
-        "created_at": datetime(2026, 11, 10, 0, 0),
+        # 相对时间：避免固定日期随真实时钟漂出 14 天窗口
+        "created_at": datetime.now() - timedelta(days=2),
     }
     values.update(overrides)
     case = ModerationCase(**values)

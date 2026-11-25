@@ -6,6 +6,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import { createApp } from "../src/app";
 import type { UserInternalClient } from "../src/internal-client";
 import { auditStub } from "./helpers/audit-stub";
+import { chatStreamStub } from "./helpers/chat-stream-stub";
 import { approvedReview } from "./helpers/review-response";
 
 const usage = {
@@ -29,7 +30,7 @@ function fixture() {
     ] }) };
   });
   const model = new MockLanguageModelV4({ doGenerate: generate, doStream: stream });
-  const client: UserInternalClient = {
+  const client: UserInternalClient = chatStreamStub().apply({
     audit: auditStub(),
     resolvePrincipal: vi.fn().mockResolvedValue(Object.freeze({ user_id: 3, role: "student",
       status: "active", identity_type: "undergraduate", assistant_cert_status: "none" })),
@@ -39,7 +40,7 @@ function fixture() {
     fetchModerationTarget: vi.fn().mockResolvedValue({ targetType: "answer",
       targetId: 1, authorId: 1, body: "x" }),
     fetchKnowledgeTree: vi.fn().mockResolvedValue([]),
-  };
+  });
   const app = createApp({ getModel: () => model, createClient: () => client });
   const request = (body: unknown) => app.request("/agent/chat", {
     method: "POST", headers: { authorization: "Bearer user" }, body: JSON.stringify(body),

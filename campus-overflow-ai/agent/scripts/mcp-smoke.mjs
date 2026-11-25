@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const READ_ONLY_TOOLS = ["search_questions", "search_courses", "list_tags"];
+const READ_ONLY_TOOLS = ["search_questions", "search_courses", "list_tags", "sync_questions"];
 const inProcess = process.argv.includes("--in-process");
 
 const callText = (result) =>
@@ -24,6 +24,7 @@ const startInProcess = async () => {
     searchQuestions: async () => [{ id: 1, title: "冒烟问题", courseId: 1 }],
     searchCourses: async () => [{ id: 1, name: "冒烟课程", code: "SMOKE" }],
     fetchTags: async () => [{ id: 1, name: "冒烟标签", type: "tech" }],
+    syncQuestions: async () => ({ items: [], next_cursor: 0, has_more: false }),
   };
   const activeToken = "smoke-active-token";
   const expiredToken = "smoke-expired-token";

@@ -6,7 +6,7 @@ export const GovernanceV2Schema = z.object({
   executed: z.boolean(), args_hash: z.string(),
   execution_state: z.string().nullable().optional(),
   frozen_call: z.object({ target_type: z.enum(["question", "answer", "comment", "user"]), target_id: z.number(),
-    action: z.enum(["hide", "delete", "ban", "ban_temp", "warn"]), duration_days: z.number().nullable(),
+    action: z.enum(["hide", "delete", "edit", "ban", "ban_temp", "warn"]), duration_days: z.number().nullable(),
     expected_version: z.string() }),
 }).superRefine((item, context) => {
   if (item.executed !== (item.status === "executed") || item.agent_run_id !== `approval-${item.request_id}`) {

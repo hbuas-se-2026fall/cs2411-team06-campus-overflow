@@ -62,14 +62,16 @@ class GovernanceRequestCreate(BaseModel):
     expected_version: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_type: Literal["question", "answer", "comment", "user"]
     target_id: int = Field(gt=0, strict=True)
-    action: Literal["hide", "delete", "ban", "ban_temp", "warn"]
+    action: Literal["hide", "delete", "edit", "ban", "ban_temp", "warn"]
     reason: str = Field(min_length=1, max_length=500)
     duration_days: int | None = Field(None, ge=1, le=30, strict=True)
 
     @model_validator(mode="after")
     def check_action(self) -> Self:
-        if (self.action in {"hide", "delete"}) == (self.target_type == "user"):
+        if (self.action in {"hide", "delete", "edit"}) == (self.target_type == "user"):
             raise ValueError("动作与目标类型不匹配")
+        if self.action == "edit" and self.target_type == "comment":
+            raise ValueError("评论不支持要求修改")
         if self.action != "ban_temp" and self.duration_days is not None:
             raise ValueError("只有限时封禁可以指定期限")
         if self.action == "ban_temp" and self.duration_days is None:
@@ -90,13 +92,15 @@ class GovernanceDryRunCreate(BaseModel):
     expected_version: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_type: Literal["question", "answer", "comment", "user"]
     target_id: int = Field(gt=0, strict=True)
-    action: Literal["hide", "delete", "ban", "ban_temp", "warn"]
+    action: Literal["hide", "delete", "edit", "ban", "ban_temp", "warn"]
     duration_days: int | None = Field(None, ge=1, le=30, strict=True)
 
     @model_validator(mode="after")
     def check_action(self) -> Self:
-        if (self.action in {"hide", "delete"}) == (self.target_type == "user"):
+        if (self.action in {"hide", "delete", "edit"}) == (self.target_type == "user"):
             raise ValueError("动作与目标类型不匹配")
+        if self.action == "edit" and self.target_type == "comment":
+            raise ValueError("评论不支持要求修改")
         if self.action != "ban_temp" and self.duration_days is not None:
             raise ValueError("只有限时封禁可以指定期限")
         if self.action == "ban_temp" and self.duration_days is None:
@@ -137,41 +141,6 @@ class GovernanceRequestOut(BaseModel):
     duration_days: int | None = None
     status: str
     repeat: bool
-
-
-# ---------- 记忆（US-17 / C-07 / X-06） ----------
-
-
-class MemoryWriteRequest(BaseModel):
-    """写入记忆请求（plan §5：userId / memoryType / content / sourceRunId）。
-
-    course_id 为可选课程上下文（plan §6 存储键），敏感内容过滤在 service 层。
-    """
-
-    user_id: int = Field(..., description="记忆归属用户")
-    memory_type: str = Field(
-        ..., min_length=1, max_length=20,
-        description="preference / course_context / task_experience",
-    )
-    content: str = Field(..., min_length=1, description="记忆正文（写入前做敏感信息过滤）")
-    course_id: int | None = Field(None, description="可选关联课程")
-    source_run_id: str | None = Field(None, max_length=64, description="来源 Agent 运行标识")
-
-
-class MemoryItemOut(BaseModel):
-    """记忆条目出参。"""
-
-    id: int
-    user_id: int
-    memory_type: str
-    content: str
-    course_id: int | None = None
-    source_run_id: str | None = None
-    is_enabled: bool
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 # ---------- Agent 运行（US-18 / C-08） ----------
@@ -326,6 +295,120 @@ class RunEventResponse(BaseModel):
     message: str = "运行事件已记录"
 
 
+# ---------- 聊天可恢复流（P0-3） ----------
+
+
+class ChatStreamCreateRequest(BaseModel):
+    """幂等创建聊天流：运行标识与 trace 由 Agent 提供，缺省不覆盖已有值。"""
+
+    model_config = {"extra": "forbid"}
+
+    agent_run_id: str | None = Field(None, max_length=64)
+    trace_id: str | None = Field(None, max_length=64)
+
+
+class ChatStreamEventCreateRequest(BaseModel):
+    """按序追加一条聊天事件；data 为原始 SSE data JSON 字符串。"""
+
+    model_config = {"extra": "forbid"}
+
+    seq: int = Field(..., ge=1, le=100_000)
+    event_type: Literal["meta", "delta", "notice", "done", "error"]
+    data: str = Field(..., min_length=1, max_length=200_000)
+
+
+class ChatStreamOut(BaseModel):
+    """聊天流快照；created 仅在 PUT 新建时为 true。"""
+
+    request_id: str
+    status: str
+    cancel_requested: bool
+    agent_run_id: str | None = None
+    trace_id: str | None = None
+    expires_at: datetime
+    created: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class ChatStreamEventItem(BaseModel):
+    seq: int
+    event_type: str
+    data: str
+
+    model_config = {"from_attributes": True}
+
+
+class ChatStreamReadOut(ChatStreamOut):
+    """续接读取：快照 + after 之后的事件（按 seq 升序）。"""
+
+    events: list[ChatStreamEventItem] = Field(default_factory=list)
+
+
+class ChatStreamEventAck(BaseModel):
+    """追加结果；duplicate=true 表示同一序号与内容已存在，未重复写入。"""
+
+    seq: int
+    status: str
+    duplicate: bool = False
+
+
+# ---------- 沙箱执行审计（P0-4） ----------
+
+# 与 Agent sandbox/contracts.ts 的 SandboxReasonCode 保持一致；新增必须先改契约。
+SandboxReasonCode = Literal[
+    "executable_denied",
+    "executable_not_allowed",
+    "argument_rejected",
+    "workspace_escape",
+    "network_denied",
+    "approval_required",
+    "output_limit_exceeded",
+    "timeout",
+    "cancelled",
+    "exec_failed",
+]
+
+
+class SandboxEventCreateRequest(BaseModel):
+    """单条沙箱审计事件：系统级，不接受用户身份字段。"""
+
+    model_config = {"extra": "forbid"}
+
+    event: Literal["sandbox_exec"] = "sandbox_exec"
+    outcome: Literal["denied", "completed", "failed"]
+    tool: str = Field(..., min_length=1, max_length=50)
+    executable: str = Field(..., min_length=1, max_length=128)
+    command_digest: str = Field(..., pattern=r"^[a-f0-9]{16}$")
+    arg_count: int = Field(..., ge=0, le=1000)
+    action_class: Literal["read", "write", "network"]
+    network_mode: Literal["none", "loopback", "allowlist"]
+    trace_id: str | None = Field(None, min_length=1, max_length=64)
+    duration_ms: int = Field(..., ge=0, le=600_000)
+    output_bytes: int = Field(..., ge=0, le=10_485_760)
+    reason_code: SandboxReasonCode | None = None
+
+    @model_validator(mode="after")
+    def _check_reason_and_name(self) -> Self:
+        # 可执行文件只留文件名：出现路径分隔符说明调用方把绝对路径带出来了
+        if "/" in self.executable or "\\" in self.executable:
+            raise ValueError("executable 只能记录文件名")
+        if self.outcome == "completed":
+            if self.reason_code is not None:
+                raise ValueError("completed 不得携带原因码")
+        elif self.reason_code is None:
+            raise ValueError("denied/failed 必须携带原因码")
+        return self
+
+
+class SandboxEventOut(BaseModel):
+    """沙箱审计回执：只回写主键，供 Agent 侧确认已落库。"""
+
+    id: int
+
+    model_config = {"from_attributes": True}
+
+
 # ---------- 审批工单（US-13 / US-14 / C-06） ----------
 
 
@@ -393,7 +476,7 @@ class DecisionUpdateRequest(BaseModel):
         ...,
         min_length=1,
         max_length=100,
-        description="处置决策：skip / hide / delete / ban（US-14）",
+        description="处置决策：skip / hide / delete / edit / ban / ban_temp / warn（US-14）",
     )
     decision_source: str | None = Field(
         None,
@@ -429,10 +512,10 @@ class ReportSaveRequest(BaseModel):
 
 
 class CaseResolveRequest(BaseModel):
-    """管理员处置审核工单请求（双环决策白名单 hide/delete/ban/ban_temp/warn/skip）。"""
+    """管理员处置审核工单请求（双环决策白名单 hide/delete/edit/ban/ban_temp/warn/skip）。"""
 
     decision: str = Field(
-        ..., description="处置动作：hide / delete / ban / ban_temp / warn / skip"
+        ..., description="处置动作：hide / delete / edit / ban / ban_temp / warn / skip"
     )
     manager_feedback: str = Field(
         ..., min_length=1, max_length=2000, description="管理员处置说明（留痕）"
@@ -505,6 +588,70 @@ class RunTraceDetail(BaseModel):
     events: list[RunEventOut]
     tool_calls: list[ToolCallOut]
     related_cases: list[ModerationCaseOut]
+
+
+class PatrolMarkCreateRequest(BaseModel):
+    """低风险内容打标（T-15-F）：同目标只保留最新一条，不改变内容状态。"""
+
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+    target_type: Literal["question", "answer", "comment"] = Field(
+        ..., description="目标内容类型"
+    )
+    target_id: int = Field(..., ge=1, description="目标内容 ID")
+    risk_level: Literal["low"] = Field("low", description="低风险标记")
+    reason: str = Field("", max_length=200, description="简短理由（不复述正文）")
+    agent_run_id: str = Field(..., min_length=1, max_length=64, description="巡检运行标识")
+
+
+class PatrolMarkOut(BaseModel):
+    """低风险打标出参。"""
+
+    id: int
+    target_type: str
+    target_id: int
+    risk_level: str
+    reason: str
+    agent_run_id: str
+    trace_id: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class McpCallCreateRequest(BaseModel):
+    """MCP 调用审计写入（T-17 N-04）：只接受脱敏摘要，凭证与原文不得入库。"""
+
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+    client_name: str = Field(..., min_length=1, max_length=80, description="外部客户端名")
+    tool_name: str = Field(..., min_length=1, max_length=120, description="工具名")
+    status: Literal["succeeded", "failed", "denied", "unregistered", "rejected"] = Field(
+        ..., description="调用结果分类"
+    )
+    args_summary: str = Field("", max_length=200, description="参数脱敏摘要")
+    result_summary: str | None = Field(None, max_length=200, description="结果脱敏摘要")
+    error_summary: str | None = Field(None, max_length=200, description="失败脱敏摘要")
+    duration_ms: int = Field(0, ge=0, le=600_000, description="耗时毫秒")
+    trace_id: str = Field("", max_length=64, description="调用 trace")
+
+
+class McpCallOut(BaseModel):
+    """MCP 调用审计出参（管理员只读）。"""
+
+    id: int
+    client_name: str
+    tool_name: str
+    status: str
+    args_summary: str
+    result_summary: str | None
+    error_summary: str | None
+    duration_ms: int
+    trace_id: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class PatrolCaseCreateRequest(BaseModel):
@@ -583,3 +730,77 @@ class PatrolNoteOut(PatrolNoteCreateItem):
     trace_id: str
     agent_run_id: str | None = None
     created_at: datetime
+
+
+class SlotLeaseClaimRequest(BaseModel):
+    """跨实例槽位申请：capacity 为同类任务全局容量，由 Agent 配置决定。"""
+
+    kind: Literal["qa", "governance", "maintenance"]
+    capacity: int = Field(..., ge=1, le=64)
+    job_id: str = Field(..., min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9:_-]+$")
+    instance_id: str = Field(
+        ..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9:_.-]+$",
+    )
+    ttl_seconds: int = Field(120, ge=10, le=3600)
+
+
+class SlotLeaseOut(BaseModel):
+    """租约出参：fencing_token 仅返回给持有者，用于续租与释放。"""
+
+    kind: str
+    slot_no: int
+    job_id: str
+    fencing_token: str
+    lease_expires_at: datetime
+
+
+class SlotLeaseTokenRequest(BaseModel):
+    fencing_token: str = Field(..., min_length=1, max_length=64)
+
+
+class SlotLeaseRenewRequest(SlotLeaseTokenRequest):
+    ttl_seconds: int = Field(120, ge=10, le=3600)
+
+
+class SlotWaitRequest(SlotLeaseClaimRequest):
+    """排队申请（P0-5）：wait_seconds 为本次排队最长等待，超时票据作废。"""
+
+    wait_seconds: int = Field(120, ge=10, le=3600)
+
+
+class SlotWaitOut(BaseModel):
+    """排队出参：waiting 带位置，granted 带租约，expired 表示等待已失效。"""
+
+    ticket_id: int
+    job_id: str
+    status: Literal["waiting", "granted", "expired"]
+    position: int | None = None
+    lease: SlotLeaseOut | None = None
+
+
+# ---------- 系统运行开关（SA-07C / ADR-010） ----------
+
+
+class SystemSettingOut(BaseModel):
+    """设置表条目（仓储层出参；value 为字符串化值）。"""
+
+    key: str
+    value: str
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PlanParallelSettingUpdate(BaseModel):
+    """管理员切换计划内并行；缺省与关闭时保持串行。"""
+
+    model_config = {"extra": "forbid"}
+
+    plan_parallel_enabled: bool
+
+
+class PlanParallelSettingOut(BaseModel):
+    """计划内并行开关出参；updated_at 为空表示从未写入、按默认关闭处理。"""
+
+    plan_parallel_enabled: bool
+    updated_at: datetime | None = None

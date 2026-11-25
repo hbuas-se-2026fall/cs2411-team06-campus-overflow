@@ -6,7 +6,7 @@ import { SecurityPolicyError, type GatewayContext, type SecurityHooks } from "..
 export const ExecutionReceiptSchema = z.object({
   execution_id: z.uuid(), request_id: z.uuid(), case_id: z.number().int().positive(), args_hash: z.string().regex(/^[a-f0-9]{64}$/),
   target_type: z.enum(["question", "answer", "comment", "user"]), target_id: z.number().int().positive(),
-  action: z.enum(["hide", "delete", "warn", "ban", "ban_temp"]), approved_by: z.number().int().positive(),
+  action: z.enum(["hide", "delete", "edit", "warn", "ban", "ban_temp"]), approved_by: z.number().int().positive(),
   executed: z.literal(true), committed_at: z.string(), trace_id: z.string(), agent_run_id: z.string(),
 }).strict();
 export const ExecutionClaimSchema = z.object({
@@ -18,7 +18,7 @@ export const ExecutionClaimSchema = z.object({
     workflow_task_id: z.uuid().optional(), workflow_round: z.number().int().min(1).max(5).optional(),
     workflow_content_version: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     target_type: z.enum(["question", "answer", "comment", "user"]), target_id: z.number().int().positive(),
-    action: z.enum(["hide", "delete", "warn", "ban", "ban_temp"]), reason: z.string(), duration_days: z.number().nullable(),
+    action: z.enum(["hide", "delete", "edit", "warn", "ban", "ban_temp"]), reason: z.string(), duration_days: z.number().nullable(),
   }).strict(),
 }).strict();
 export type ExecutionClaim = z.infer<typeof ExecutionClaimSchema>;

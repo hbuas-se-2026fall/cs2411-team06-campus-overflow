@@ -5,6 +5,7 @@ import { SSEStreamingApi } from "hono/streaming";
 import { createApp } from "../src/app";
 import { InternalApiError } from "../src/internal-client";
 import { auditStub } from "./helpers/audit-stub";
+import { chatStreamStub } from "./helpers/chat-stream-stub";
 
 const usage = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 0, text: 0, reasoning: 0 } };
@@ -33,14 +34,15 @@ function fixture(outputs: unknown[], chatTexts = ["已核验的建议"]) {
     output.close();
   } }) }));
   const audit = auditStub();
-  const client = { audit,
+  const client = chatStreamStub().apply({ audit,
     resolvePrincipal: vi.fn().mockResolvedValue({ user_id: 3, role: "student", status: "active",
       identity_type: "undergraduate", assistant_cert_status: "none" }),
     searchCourses: vi.fn().mockResolvedValue([]),
     searchQuestions: vi.fn().mockResolvedValue([{ id: 9, title: "真实问题", courseId: 2 }]),
     fetchTags: vi.fn().mockResolvedValue([{ id: 7, name: "并发", type: "tech" }]),
     fetchModerationTarget: vi.fn().mockResolvedValue({ targetType: "answer", targetId: 12, authorId: 3, body: "真实原文" }),
-  };
+    createPatrolCase: vi.fn().mockResolvedValue({ repeat: false }),
+  });
   const model = new MockLanguageModelV4({ doGenerate: generate, doStream: stream });
   const app = createApp({ getModel: () => model, createClient: () => client });
   const request = (kind = "doc_draft", input: unknown = { topic: "线程", courseId: 2 }) => app.request(

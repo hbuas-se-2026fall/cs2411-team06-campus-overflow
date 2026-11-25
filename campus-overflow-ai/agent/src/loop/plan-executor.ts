@@ -1,12 +1,13 @@
-// 受控计划执行（G-03 / AG-R02）：程序逐步校验并顺序执行模型生成的 PlanList。
+// 受控计划执行（G-03 / AG-R02）：程序校验并按依赖执行模型生成的 PlanList。
 // 未知工具、非低风险工具、越权参数、非法引用、参数非法 → 拒绝该调用（明确失败，不自动重试）；
 // 普通工具错误按步骤收集，401/403 立即终止；预算跨计划/返工累计且不重置。
-// 授权依据永远是运行上下文的后端可信 principal，而非计划中模型声明的任何身份字段。
+// 2026-11-24（SA-07 / ADR-010）：开启并行后，同层无依赖步骤并发执行；含审批动作的计划仍整份串行。
 import { z } from "zod";
 import { SecurityPolicyError } from "../security/contracts.js";
 
 import { InternalApiError } from "../internal-client.js";
 import { checkSignal, RunStoppedError, withUpstreamDeadline } from "./abort.js";
+import { acquireInflight } from "./inflight-limiter.js";
 import type { PlanAudit } from "../observability/persistent-audit.js";
 import type { ToolExecutionContext, ToolRegistry } from "../tools/registry.js";
 import type { PlanList, PlanStep } from "../types/plan.js";
@@ -152,6 +153,74 @@ export const validatePlan = (plan: PlanList, options: PlanValidationOptions): vo
   }
 };
 
+/** 审批/建单类工具：出现即整份计划回退串行，保持审批顺序与幂等语义（ADR-010） */
+const SERIAL_TOOL_NAMES = new Set([
+  "proposeGovernance",
+  "proposeClassMembership",
+  "proposeTeachingExperience",
+]);
+
+/** 单计划在途上限（ADR-010：默认 4） */
+export const DEFAULT_MAX_PARALLEL_STEPS = 4;
+/** 进程级在途上限（ADR-010：默认 12，按 4C4G 设定） */
+export const DEFAULT_MAX_INFLIGHT_CALLS = 12;
+
+const readPositiveInt = (raw: string | undefined, fallback: number): number => {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+};
+
+/** 并行开关默认关闭；未开启时保持串行执行（ADR-010） */
+export const isPlanParallelEnabled = (): boolean => process.env.PLAN_PARALLEL_ENABLED === "true";
+export const resolveMaxParallelSteps = (): number =>
+  readPositiveInt(process.env.PLAN_MAX_PARALLEL_STEPS, DEFAULT_MAX_PARALLEL_STEPS);
+export const resolveMaxInflightCalls = (): number =>
+  readPositiveInt(process.env.MAX_INFLIGHT_TOOL_CALLS, DEFAULT_MAX_INFLIGHT_CALLS);
+
+/**
+ * 按 `$sN` 引用构建步骤依赖层：同层步骤互不依赖，可并发；层与层之间按依赖顺序执行。
+ * 引用不存在或成环按计划执行错误处理，与串行时“引用了未执行的步骤”保持一致。
+ */
+export const buildPlanLayers = (plan: PlanList): PlanStep[][] => {
+  const byId = new Map(plan.steps.map((step) => [step.stepId, step]));
+  const deps = new Map<string, readonly string[]>();
+  for (const step of plan.steps) {
+    const refs = new Set<string>();
+    for (const value of Object.values(step.args)) {
+      if (typeof value !== "string" || !value.startsWith("$")) continue;
+      const parsed = parseStepRef(value);
+      if (parsed && parsed.target !== INPUT_REF_ID) refs.add(parsed.target);
+    }
+    deps.set(step.stepId, [...refs]);
+  }
+
+  const layerOf = new Map<string, number>();
+  const resolveLayer = (id: string, stack: Set<string>): number => {
+    const known = layerOf.get(id);
+    if (known !== undefined) return known;
+    if (!byId.has(id)) throw new PlanExecutionError(`引用了未执行的步骤：${id}`);
+    if (stack.has(id)) throw new PlanExecutionError("计划步骤存在循环引用");
+    stack.add(id);
+    const layer = (deps.get(id) ?? []).reduce((max, dep) => Math.max(max, resolveLayer(dep, stack) + 1), 0);
+    stack.delete(id);
+    layerOf.set(id, layer);
+    return layer;
+  };
+
+  const layers: PlanStep[][] = [];
+  for (const step of plan.steps) {
+    const layer = resolveLayer(step.stepId, new Set());
+    (layers[layer] ??= []).push(step);
+  }
+  return layers;
+};
+
+const isWaitingResult = (toolName: string, result: unknown): boolean => {
+  if (!SERIAL_TOOL_NAMES.has(toolName) || !result || typeof result !== "object") return false;
+  const record = result as Record<string, unknown>;
+  return (record.approval_required === true) || (record.waiting_for_execution === true);
+};
+
 export interface ExecutePlanOptions extends PlanValidationOptions {
   /** 工具执行上下文：principal 来自运行上下文（后端已验证），不来自模型 */
   toolContext: ToolExecutionContext & { readonly toolBudget: ToolCallBudget };
@@ -160,6 +229,8 @@ export interface ExecutePlanOptions extends PlanValidationOptions {
   /** 解析引用后、实际调用前验证任务范围；策略错误不得按读取故障降级。 */
   assertArgs?: (toolName: string, args: Readonly<Record<string, unknown>>) => void;
   audit?: PlanAudit;
+  /** 并行开关覆盖；缺省读取 PLAN_PARALLEL_ENABLED（全局开关接线后由调用方传入）。 */
+  parallel?: boolean;
 }
 
 export interface ExecutePlanResult {
@@ -181,8 +252,19 @@ export const executePlan = async (
   const stepResults = new Map<string, unknown>();
   const failures = new Map<string, unknown>();
   let state: "completed" | "waiting" = "completed";
-  for (const step of plan.steps) {
-    checkSignal(options.toolContext.signal);
+
+  const runParallel = (options.parallel ?? isPlanParallelEnabled())
+    && !plan.steps.some((step) => SERIAL_TOOL_NAMES.has(step.toolName));
+  const maxParallel = resolveMaxParallelSteps();
+  const maxInflight = resolveMaxInflightCalls();
+  const controller = new AbortController();
+  const signal = options.toolContext.signal
+    ? AbortSignal.any([options.toolContext.signal, controller.signal])
+    : controller.signal;
+
+  /** 执行单个步骤；返回 true 表示该步骤要求后续停止（待人工确认）。 */
+  const runStep = async (step: PlanStep): Promise<boolean> => {
+    checkSignal(signal);
     const tool = requireExecutableTool(options.registry, step.toolName);
     const args = resolveArgs(step, stepResults, options.input);
     options.assertArgs?.(step.toolName, args);
@@ -199,39 +281,77 @@ export const executePlan = async (
       throw new PlanExecutionError(`步骤 ${step.stepId}（${step.toolName}）参数校验失败：${detail}`);
     }
     if (options.toolContext.toolBudget.used >= MAX_TOOL_CALLS) throw new PlanBudgetError("达到累计工具调用上限");
-    await options.audit?.beforeStep(step);
-    checkSignal(options.toolContext.signal);
-    const executable = requireExecutableTool(options.registry, step.toolName);
-    options.toolContext.toolBudget.consume();
-    const startedAt = performance.now();
-    let failed = false;
-    let failure: unknown;
-    let result: unknown;
+
+    const release = await acquireInflight(maxInflight, signal);
     try {
-      result = await withUpstreamDeadline(options.toolContext.signal, (signal) =>
-        executable.execute!(parsedArgs, { ...options.toolContext, signal }));
-    } catch (error) {
-      if (error instanceof RunStoppedError || error instanceof SecurityPolicyError) throw error;
-      failed = true;
-      failure = error;
-    }
-    // 审计不放入工具错误 catch，写入失败必须终止，不能被任务降级掩盖。
-    checkSignal(options.toolContext.signal);
-    await options.audit?.afterStep(step, failed ? "failed" : "succeeded", Math.round(performance.now() - startedAt));
-    checkSignal(options.toolContext.signal);
-    if (failed) {
-      if (failure instanceof InternalApiError && (failure.status === 401 || failure.status === 403)) throw failure;
-      failures.set(step.stepId, failure);
-    } else {
+      checkSignal(signal);
+      await options.audit?.beforeStep(step);
+      checkSignal(signal);
+      options.toolContext.toolBudget.consume();
+      const startedAt = performance.now();
+      let failed = false;
+      let failure: unknown;
+      let result: unknown;
+      try {
+        result = await withUpstreamDeadline(signal, (upstream) =>
+          tool.execute!(parsedArgs, { ...options.toolContext, signal: upstream }));
+      } catch (error) {
+        if (error instanceof RunStoppedError || error instanceof SecurityPolicyError) throw error;
+        failed = true;
+        failure = error;
+      }
+      // 审计不放入工具错误 catch，写入失败必须终止，不能被任务降级掩盖。
+      checkSignal(signal);
+      await options.audit?.afterStep(step, failed ? "failed" : "succeeded", Math.round(performance.now() - startedAt));
+      checkSignal(signal);
+      if (failed) {
+        if (failure instanceof InternalApiError && (failure.status === 401 || failure.status === 403)) throw failure;
+        failures.set(step.stepId, failure);
+        return false;
+      }
       stepResults.set(step.stepId, result);
-      if (["proposeGovernance", "proposeClassMembership", "proposeTeachingExperience"].includes(step.toolName)
-        && result && typeof result === "object"
-        && (("approval_required" in result && result.approval_required === true)
-          || ("waiting_for_execution" in result && result.waiting_for_execution === true))) {
+      return isWaitingResult(step.toolName, result);
+    } finally {
+      release();
+    }
+  };
+
+  if (!runParallel) {
+    for (const step of plan.steps) {
+      if (await runStep(step)) {
         state = "waiting";
         break;
       }
     }
+    return { state, stepResults, failures, toolCallCount: options.toolContext.toolBudget.used };
   }
+
+  const layers = buildPlanLayers(plan);
+  let fatal: unknown;
+  const abortAll = (error: unknown): void => {
+    if (fatal !== undefined) return;
+    fatal = error;
+    controller.abort(error);
+  };
+
+  for (const layer of layers) {
+    // 含 propose* 的计划已在上面回退串行，并行路径不会产生“等待人工确认”。
+    if (fatal !== undefined) break;
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < layer.length) {
+        if (fatal !== undefined) return;
+        const step = layer[cursor++];
+        try {
+          if (await runStep(step)) state = "waiting";
+        } catch (error) {
+          abortAll(error);
+          return;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(layer.length, maxParallel) }, worker));
+  }
+  if (fatal !== undefined) throw fatal;
   return { state, stepResults, failures, toolCallCount: options.toolContext.toolBudget.used };
 };

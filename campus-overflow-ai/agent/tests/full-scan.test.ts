@@ -51,12 +51,14 @@ function fixtureClient(pages: PatrolScanPage[]) {
       }),
     ),
     createPatrolCase: vi.fn().mockResolvedValue({ repeat: false }),
+    createPatrolMark: vi.fn().mockResolvedValue({ repeat: false }),
   } as unknown as UserInternalClient & {
     audit: { createRun: ReturnType<typeof vi.fn>; finishRun: ReturnType<typeof vi.fn> };
     fetchPatrolScanPage: ReturnType<typeof vi.fn>;
     heartbeatPatrolScan: ReturnType<typeof vi.fn>;
     updatePatrolScanProgress: ReturnType<typeof vi.fn>;
     createPatrolCase: ReturnType<typeof vi.fn>;
+    createPatrolMark: ReturnType<typeof vi.fn>;
   };
 }
 

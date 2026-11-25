@@ -8,6 +8,10 @@ import type { ToolExecutionContext } from "../src/tools/registry.js";
 import { createSearchKnowledgeTool } from "../src/tools/search-knowledge.js";
 
 const chunks: RagChunk[] = [
+  {
+    id: "db#summary", cardId: "db", courseId: 1, kind: "summary", title: "数据库",
+    text: "事务与并发控制摘要",
+  },
   { id: "db#deadlock", cardId: "db", courseId: 1, kind: "body", title: "数据库", text: "死锁检测与预防" },
   { id: "os#schedule", cardId: "os", courseId: 2, kind: "body", title: "操作系统", text: "进程调度时间片轮转" },
 ];
@@ -28,9 +32,20 @@ describe("searchKnowledge 工具", () => {
       hits: { chunk_id: string; card_id: string; kind: string; text: string }[];
     };
     expect(result.configured).toBe(true);
-    expect(result.hits[0]?.chunk_id).toBe("db#deadlock");
+    expect(result.hits[0]?.kind).toBe("summary");
     expect(result.hits[0]?.card_id).toBe("db");
-    expect(result.hits.every(hit => hit.chunk_id.startsWith("db#"))).toBe(true);
+    expect(result.hits.some(hit => hit.chunk_id === "db#deadlock")).toBe(true);
+    expect(result.hits.every(hit => hit.card_id === "db")).toBe(true);
+  });
+
+  it("limit 表示卡片数，每张卡片返回摘要与正文（D-022）", async () => {
+    const index = await buildIndex();
+    const tool = createSearchKnowledgeTool(async () => index, 1);
+    const result = await tool.execute!({ query: "死锁", limit: 1 }, context) as {
+      hits: { chunk_id: string; kind: string }[];
+    };
+
+    expect(result.hits.map(hit => hit.chunk_id)).toEqual(["db#summary", "db#deadlock"]);
   });
 
   it("拒绝模型传入 courseId 或其他额外字段", async () => {
@@ -77,6 +92,54 @@ describe("searchKnowledge 工具", () => {
     const result = await tool.execute!({ query: "死锁" }, context) as { configured: boolean; hits: unknown[]; degraded?: boolean };
     expect(result).toMatchObject({ configured: true, hits: [], degraded: true });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("rag_tool_search_failed"));
+    errorSpy.mockRestore();
+  });
+
+  it("复合问题拆成多个子问题检索（D-009）", async () => {
+    const localChunks: RagChunk[] = [
+      {
+        id: "db#deadlock", cardId: "db", courseId: 1, kind: "body", title: "数据库",
+        text: "死锁检测与预防",
+      },
+      {
+        id: "api#quota", cardId: "api", courseId: 1, kind: "body", title: "接口",
+        text: "配额超限错误码 ERR_QUOTA_429",
+      },
+    ];
+    const index = await RagIndex.build({
+      chunks: localChunks,
+      embedder: createHashEmbeddingProvider({ dimensions: 64 }),
+    });
+    const tool = createSearchKnowledgeTool(async () => index, 1);
+    const result = await tool.execute!({ query: "死锁？配额？", limit: 2 }, context) as {
+      hits: { card_id: string }[];
+    };
+
+    expect(new Set(result.hits.map(hit => hit.card_id))).toEqual(new Set(["db", "api"]));
+  });
+
+  it("重排失败时仍返回 RRF 结果并记录降级诊断", async () => {
+    const index = await RagIndex.build({
+      chunks,
+      embedder: createHashEmbeddingProvider({ dimensions: 64 }),
+      reranker: {
+        model: "broken",
+        rerank: async () => {
+          throw new Error("rerank 服务返回 HTTP 500");
+        },
+      },
+    });
+    const tool = createSearchKnowledgeTool(async () => index, 1);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const result = await tool.execute!({ query: "死锁", limit: 2 }, context) as {
+      configured: boolean;
+      hits: unknown[];
+      degraded?: boolean;
+    };
+    expect(result.configured).toBe(true);
+    expect(result.hits.length).toBeGreaterThan(0);
+    expect(result.degraded).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("rag_rerank_degraded"));
     errorSpy.mockRestore();
   });
 });

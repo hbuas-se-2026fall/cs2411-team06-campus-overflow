@@ -43,6 +43,7 @@ def notify_case_resolved(
     decision_text = {
         "hide": "内容已被隐藏", "delete": "内容已被删除", "ban": "账号已被封禁",
         "ban_temp": "账号已被限时封禁", "warn": "你已收到正式警告",
+        "edit": "内容需按要求修改，修改后标记自动解除",
         "skip": "经复核无需处置",
     }.get(decision, decision)
     interaction_service.notify(

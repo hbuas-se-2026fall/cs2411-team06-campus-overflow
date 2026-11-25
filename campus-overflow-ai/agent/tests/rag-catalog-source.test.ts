@@ -32,7 +32,9 @@ describe("目录转 RAG 片段", () => {
     const chunks = await collectCatalogChunks(catalog, [1]);
     expect(chunks.map(chunk => chunk.id)).toEqual(["linear#summary", "linear#body-0"]);
     expect(chunks[0]).toMatchObject({ kind: "summary", courseId: 1, title: "线性代数" });
+    expect(chunks[0]?.tagIds).toEqual([1]);
     expect(chunks[1].text).toContain("第一段");
+    expect(chunks[1].tagIds).toEqual([1]);
     expect(getBody).toHaveBeenCalledWith("linear", [1], "v1");
   });
 

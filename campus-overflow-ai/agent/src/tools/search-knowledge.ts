@@ -7,7 +7,7 @@ import type { AgentTool, ToolExecutionContext } from "./registry.js";
 
 const SearchKnowledgeInputSchema = z.object({
   query: z.string().min(1).max(200).describe("要检索的课程问题或关键词"),
-  limit: z.number().int().min(1).max(5).default(3).describe("返回片段数上限"),
+  limit: z.number().int().min(1).max(5).default(3).describe("返回卡片数上限，每张卡片最多含摘要与正文两条"),
 }).strict();
 
 export interface SearchKnowledgeOutput {
@@ -49,11 +49,20 @@ export const createSearchKnowledgeTool = (
     }
     if (!index) return { configured: false, hits: [] };
     try {
-      const result = await index.search(parsed.query, {
+      const result = await index.searchMany([parsed.query], {
         topK: parsed.limit,
         topN: 20,
         courseId,
       });
+      // 重排失败已回退 RRF；这里只记录脱敏诊断，不把整次检索标记为降级。
+      if (result.diagnostics.rerankError) {
+        console.error(JSON.stringify({
+          event: "rag_rerank_degraded",
+          course_id: courseId,
+          candidates: result.diagnostics.rerankCandidates,
+          reason: result.diagnostics.rerankError,
+        }));
+      }
       return {
         configured: true,
         hits: result.hits.map(hit => ({

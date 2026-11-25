@@ -16,7 +16,11 @@ def test_incremental_migration_roundtrip(tmp_path):
         table for table in Base.metadata.sorted_tables
         if table.name not in {
             "patrol_workflow_tasks", "patrol_workflow_scans", "patrol_notes",
-            "patrol_scan_jobs",
+            "patrol_scan_jobs", "agent_slot_leases", "agent_slot_waiters",
+            "agent_chat_streams", "agent_chat_stream_events",
+            "agent_sandbox_events",
+            # 由基线之后的迁移创建，不能在 stamp 前由 metadata 预建
+            "system_settings", "moderation_marks", "mcp_call_logs",
         }
     ])
     engine.dispose()

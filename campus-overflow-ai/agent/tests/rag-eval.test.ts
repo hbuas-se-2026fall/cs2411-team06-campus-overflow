@@ -6,13 +6,27 @@ import type { RagIndex } from "../src/knowledge/rag/index.js";
 import type { RagHit, RagSearchResult } from "../src/knowledge/rag/types.js";
 
 const hit = (chunkId: string): RagHit => ({
-  chunkId, cardId: "card", courseId: 1, kind: "body", text: chunkId, score: 1,
+  chunkId, cardId: "card", courseId: 1, kind: "body", text: chunkId, score: 1, rrfScore: 1,
 });
 
 const stubIndex = (results: Record<string, string[]>): RagIndex => ({
   search: vi.fn(async (query: string): Promise<RagSearchResult> => ({
     hits: (results[query] ?? []).map(hit),
-    diagnostics: { denseCandidates: 0, keywordCandidates: 0, fusedCandidates: 0 },
+    diagnostics: {
+      denseCandidates: 0,
+      keywordCandidates: 0,
+      fusedCandidates: 0,
+      cardCandidates: 0,
+      subQueryCount: 1,
+      subQueries: [],
+      expandedCandidates: 0,
+      expandedHits: 0,
+      rerankApplied: false,
+      rerankCandidates: 0,
+      rerankDropped: 0,
+      contextChars: 0,
+      truncated: false,
+    },
   })),
 } as unknown as RagIndex);
 

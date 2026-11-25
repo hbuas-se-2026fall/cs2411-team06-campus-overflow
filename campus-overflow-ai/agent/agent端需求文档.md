@@ -1,5 +1,7 @@
 # Agent 服务需求文档（二期实施范围）
 
+> **2026-11-24 状态覆盖（优先于下方历史状态）**：T-14～T-17 子项全部完成且父任务已验收——M-03/M-04、T-15 E/F/G、T-16-C/D、T-17 N-03～N-07 均已交付；个人记忆 AI 自动更新走“Agent 候选 + 浏览器同源写入”。仍未完成：真实模型与真实 MySQL 联调、真实外部 MCP Server 联调、生产部署与多实例容量（归部署/运维验收）；子 Agent 池 SA-01/02B/06 已落地，SA-03/04/05 待生产验收。下方 2026-10-23/24 的“未实施/收官”表述以本段为准。
+
 > **2026-10-24 二期正式任务收官（T-14~T-17 实现验证完成，待人工验收）**：在 G 系列主干之上交付——静默巡检调度器与自动建单（US-13 自动化触发）、教师周报调度（KN-R02）、大纲分析任务（KN-R01）、浏览器个人记忆只读注入（聊天契约 browser_memory）、MCP Server 只读同步（registry/policy/audit/http 四模块，MCP_SERVER_ENABLED 默认关）。单列限制：真实模型联调、管理员工具通道（审批工单+身份映射，等大系统对齐）、AI 自动更新记忆、客户端角色。详见 docs/Agent层验证记录/T-14~T-17 四篇与 my_engineer_docs 决策记录。
 
 > **2026-10-23 首批受控运行主干交付状态（G-06 实现验证完成，待人工验收）**：G-01～G-06 全部实现验证与三服务批次收口完成（见 `../../docs/Agent层验证记录/G-06.md`）。已交付：双凭证可信身份解析、BFF → Agent → FastAPI 身份链路、聊天与四类任务统一的模型 PlanList 受控规划（累计 12 次工具/8 步/1 次返工/180 秒预算）、持久运行与步骤审计（创建失败阻断执行、记录失败终止）、总结自检与来源检查、超时取消，及跨服务隔离集成测试。单列限制（未交付）：真实模型联调、真实 MySQL 并发取证、进程崩溃恢复、三服务部署互通；个人记忆（T-14，浏览器隔离方案）、治理审批闭环（T-15）、管理端观测检索（T-16）、MCP（T-17）未实施，下文相关描述是后续验收目标。
@@ -10,7 +12,7 @@
 
 > **2026-10-18 设计增量**：用户确认采用受控 PlanList；个人记忆在本人授权范围内自动更新，教师不得读取学生个人记忆，管理员管理与审计独立授权；公共 Wiki 由 AI 提交草稿、管理员审核发布。目标设计见 `../../docs/Agent层设计与实施分期.md`，正式需求见 spec AG-R01～06，当前执行见 tasks G-01～G-06。新决定覆盖下文与之冲突的旧权限和编排描述，不代表后续分期已经实现。
 
-> 状态（2026-10-10）：T-11 单 Agent Loop、T-12 内部白名单接口对接、T-13 标签与相似问题推荐已完成；记忆完整能力、治理审批、观测查询和 MCP Adapter 分别归 T-14~T-17。下文未完成能力是后续验收目标，不代表当前已交付。2026-11-19 起编排升级为子 Agent 池，见 3.2。
+> 状态（2026-10-10）：T-11 首批受控运行主干、T-12 内部白名单接口对接、T-13 标签与相似问题推荐已完成；记忆完整能力、治理审批、观测查询和 MCP Adapter 分别归 T-14~T-17。下文未完成能力是后续验收目标，不代表当前已交付。2026-11-19 起编排升级为子 Agent 池，见 3.2；T-14~T-17 的当前剩余项以 2026-11-21 状态覆盖为准。
 
 ## 1. 服务定位与边界
 
@@ -19,7 +21,7 @@ Agent 服务是独立的 TypeScript 服务（Vercel AI SDK + Hono，Node ≥ 22 
 **必须做**：
 
 - 使用 Vercel AI SDK 调用模型，维护主 Agent 编排与子 Agent 执行入口。
-- 经 FastAPI 白名单接口读写持久化记忆与业务上下文。
+- 业务上下文经 FastAPI 白名单接口读取；个人记忆按 C-07 默认保存在浏览器，Agent 只接收最小必要上下文。
 - 生成结构化建议，流式输出。
 - 自检输出是否满足格式、来源和风险要求。
 - 记录每次运行的 agent_run_id 与 trace id。
@@ -68,7 +70,7 @@ Agent 服务是独立的 TypeScript 服务（Vercel AI SDK + Hono，Node ≥ 22 
 
 ### 3.2 任务路由与任务处理器
 
-2026-11-19 用户确认改为“主 Agent 编排 + 子 Agent 池”：每实例最多 8 个子 Agent（3 治理槽 + 5 问答槽），问答槽空闲可支援治理；子 Agent 同进程逻辑隔离、外部执行走沙箱，主 Agent 负责编排与共享记忆整理。`agent/src/orchestrator/` 负责槽位调度与上下文装配，`agent/src/agents/` 为子 Agent 执行入口。设计见 specs/plan.md AX-R09，任务见 tasks.md SA-01～SA-06（SA-01～SA-02B 已本地实现待审查，SA-03～SA-06 尚未实施）。
+2026-11-19 用户确认改为“主 Agent 编排 + 子 Agent 池”：每实例最多 8 个子 Agent（3 治理槽 + 5 问答槽），问答槽空闲可支援治理；子 Agent 同进程逻辑隔离、外部执行走沙箱，主 Agent 负责编排与共享记忆整理。`agent/src/orchestrator/` 负责槽位调度与上下文装配，`agent/src/agents/` 为子 Agent 执行入口。设计见 specs/plan.md AX-R09，任务见 tasks.md SA-01～SA-06（截至 2026-11-21：SA-01/02B/06 已落地，SA-03/04/05 待生产验收）。
 
 | 任务处理器 | 职责 | 可调用工具示例 |
 | ---------- | ---- | -------------- |
@@ -78,14 +80,14 @@ Agent 服务是独立的 TypeScript 服务（Vercel AI SDK + Hono，Node ≥ 22 
 
 MVP 任务类型与风险等级：
 
-> 当前状态：T-11/T-13 已注册 `suggest_tags`、`similar_questions`、`moderation_scan`、`doc_draft` 四种任务类型；只有前两种完成产品能力验收。`moderation_scan` 的工单闭环待 T-15，`doc_draft` 未被 spec 收录；下表中的 `memory_update` 是 T-14 目标，不是当前路由枚举。
+> 当前状态：T-11/T-13 已注册 `suggest_tags`、`similar_questions`、`moderation_scan`、`doc_draft` 四种任务类型；`moderation_scan` 已按 T-15-B 在 `shouldEscalate` 时创建待确认工单，`doc_draft` 未被 spec 收录；`memory_update` 不是独立任务路由，个人记忆更新由 `POST /agent/memory/suggestions` 承载（M-03）。
 
 | 任务 | 风险 | 行为 |
 | ---- | ---- | ---- |
 | suggest_tags | 低 | 返回推荐标签及理由，用户确认后才写入 |
 | similar_questions | 低 | 返回相似问题列表与链接 |
-| moderation_scan | 高 | 当前仅返回风险评估；T-15 才创建审核工单 |
-| memory_update（未实现） | 低/中 | T-14 目标：写入用户偏好、课程上下文、任务经验 |
+| moderation_scan | 高 | 返回风险评估；`shouldEscalate` 时创建待确认工单（T-15-B） |
+| memory_update（M-03 已实现） | 低 | 生成个人记忆候选，由前端按开关写入浏览器；不落后端、不进审计 |
 
 验收标准：
 
@@ -118,7 +120,7 @@ MVP 任务类型与风险等级：
 
 ### 3.4 持久化记忆
 
-记忆读写放 `agent/src/memory/`，只调用 FastAPI 内部接口，实际存储在 MySQL。
+记忆读写放 `agent/src/memory/`。按 C-07 修订版，学生/教师个人记忆只保存在浏览器 localStorage，按账号隔离并可清空；Agent 只生成候选，由前端同源过滤后写入。管理员私人上下文保存在服务器私有文件，与大系统中台会话分目录隔离。业务后端不提供个人记忆列表/删除接口。
 
 | 类型 | 用途 | 示例 |
 | ---- | ---- | ---- |
@@ -255,11 +257,12 @@ interface McpToolDefinition {
 | /internal/agent/runs | POST | 创建运行记录 | 全部 |
 | /internal/agent/runs/{agent_run_id} | PATCH | 更新运行结果 | 全部 |
 | /internal/agent/tool-calls | POST | 写入工具调用日志 | 全部 |
-| /internal/agent/memory | GET / POST | 读取或写入记忆 | T-14 记忆闭环 |
-| /internal/agent/approvals | POST | 创建人工确认请求 | moderation_scan |
+| /internal/agent/mcp/calls | POST | 写入 MCP 调用审计（脱敏摘要） | MCP 服务 |
+| /internal/agent/sync/questions | GET | 增量同步可见问题 | MCP sync_questions |
+| /internal/agent/approvals | POST | 创建人工确认请求 | moderation_scan / 高风险 MCP |
 | /internal/agent/moderation-cases/{case_id}/decision | PATCH | 更新工单决策（T-16 扩展） | moderation_scan |
 
-> 上表是 T-12 已注册的真实路径；其中 memory、approvals、runs、tool-calls 的完整 Agent 侧持久化闭环分别由 T-14～T-16 完成。问题详情、课程上下文、审核快照等旧草案路径尚未注册。
+> 上表为当前真实路径；个人记忆按 C-07 只保存在浏览器，`/internal/agent/memory` 已随 T-14 M-04 删除。approvals、runs、tool-calls、mcp/calls 的 Agent 侧持久化闭环由 T-14～T-17 完成。问题详情、课程上下文、审核快照等旧草案路径尚未注册。
 
 要求：
 
@@ -312,7 +315,7 @@ interface McpToolDefinition {
 
 ## 6. MVP 验收清单
 
-- [ ] suggest_tags、similar_questions、moderation_scan、memory_update 四类任务可用
+- [ ] suggest_tags、similar_questions、moderation_scan 三类任务可用，个人记忆更新候选可用（`/agent/memory/suggestions`）
 - [ ] 流式输出端到端可演示（生成中 / 失败重试 / 人工确认三态）
 - [ ] 每次运行有唯一 agent_run_id 与 trace id
 - [ ] 未注册工具无法被调用（有测试证明）

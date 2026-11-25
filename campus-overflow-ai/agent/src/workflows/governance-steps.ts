@@ -25,7 +25,7 @@ export async function proposeGovernanceAction(taskId: string, round: number, ind
     bytes[6] = (bytes[6]! & 15) | 64; bytes[8] = (bytes[8]! & 63) | 128;
     const hex = bytes.toString("hex");
     const requestId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-    const target = ["hide", "delete"].includes(action.action) ? current.content : current.author;
+    const target = ["hide", "delete", "edit"].includes(action.action) ? current.content : current.author;
     if (!target) throw new Error("workflow_author_missing");
     let raw;
     try {

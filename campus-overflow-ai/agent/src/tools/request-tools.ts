@@ -10,6 +10,7 @@ import { createToolRegistry } from "./registry.js";
 import { createCourseContextTools } from "./course-context.js";
 import { createRoleActionTools } from "./role-actions.js";
 import { createSearchKnowledgeTool } from "./search-knowledge.js";
+import { createUpstreamMcpTools, upstreamServersFromEnv } from "../mcp/upstream.js";
 
 /** 快照读取默认关闭；开启后只用于出候选 id，最终可见性由后端复核 */
 const getQaSnapshot = () =>
@@ -29,7 +30,9 @@ export const createRequestTools = (client: UserInternalClient, principal: AgentP
     )]
     : [];
   const tools = [...createCourseContextTools(client, courseId), ...ragTools,
-    ...createRoleActionTools(client, principal), ...createWebTools(principal, webOptions)];
+    ...createRoleActionTools(client, principal), ...createWebTools(principal, webOptions),
+    // N-06：仅配置内的低风险外部 MCP 工具进入模型工具集；高风险工具不会暴露。
+    ...createUpstreamMcpTools(upstreamServersFromEnv())];
   for (const tool of tools) base.registerTool(tool);
   return createChildRegistry(base, () => readMainRules(process.env.MAIN_AGENT_RULES_PATH), principal);
 };

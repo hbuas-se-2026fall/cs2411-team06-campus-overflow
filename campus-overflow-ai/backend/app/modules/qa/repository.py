@@ -141,6 +141,9 @@ def update_question(
         question.title = title
     if body is not None:
         question.body = body
+    if title is not None or body is not None:
+        # 作者已按要求修改，清除治理标记（T-15-E）
+        question.needs_revision = False
     db.flush()
     return QuestionResponse.model_validate(question)
 
@@ -243,6 +246,8 @@ def update_answer(db: Session, answer_id: int, body: str) -> AnswerResponse:
     if answer is None:
         raise domain.AnswerNotFoundError()
     answer.body = body
+    # 作者已按要求修改，清除治理标记（T-15-E）
+    answer.needs_revision = False
     db.flush()
     return AnswerResponse.model_validate(answer)
 
@@ -749,6 +754,27 @@ def count_questions_by_course_ids(db: Session, course_ids: list[int]) -> dict[in
     ).group_by(Question.course_id).all())
 
 
+def list_questions_for_sync(
+    db: Session,
+    updated_after: datetime,
+    cursor_id: int,
+    limit: int,
+) -> list[Question]:
+    """增量同步（T-17 N-05）：按更新时间过滤、id 游标升序，排除软删/隐藏。"""
+    return (
+        db.query(Question)
+        .filter(
+            Question.deleted_at.is_(None),
+            Question.is_hidden.is_(False),
+            Question.updated_at >= updated_after,
+            Question.id > cursor_id,
+        )
+        .order_by(Question.id.asc())
+        .limit(limit)
+        .all()
+    )
+
+
 def list_recent_questions(
     db: Session,
     course_id: int,
@@ -941,6 +967,29 @@ def moderation_restore_deleted(db: Session, target_type: str, target_id: int) ->
     if row is None:
         raise domain.QuestionNotFoundError()
     row.deleted_at = None
+    db.flush()
+
+
+# 要求修改（T-15-E）：置位不改变可见性，作者编辑后自动清除
+def moderation_set_needs_revision(db: Session, target_type: str, target_id: int) -> None:
+    """置 needs_revision（仅问题/回答支持，评论无编辑流程）。"""
+    model = _MOD_MODELS[target_type]
+    row = db.query(model).filter(model.id == target_id).with_for_update(
+    ).populate_existing().first()
+    if row is None or not hasattr(row, "needs_revision"):
+        raise domain.ModerationTargetUnavailableError()
+    row.needs_revision = True
+    db.flush()
+
+
+def moderation_clear_needs_revision(db: Session, target_type: str, target_id: int) -> None:
+    """清除 needs_revision（申诉复核撤销 edit 处置，T-15-E）。"""
+    model = _MOD_MODELS[target_type]
+    row = db.query(model).filter(model.id == target_id).with_for_update(
+    ).populate_existing().first()
+    if row is None or not hasattr(row, "needs_revision"):
+        raise domain.ModerationTargetUnavailableError()
+    row.needs_revision = False
     db.flush()
 
 
