@@ -165,6 +165,10 @@ describe("WorkflowSkillsView", () => {
     expect((within(dialog).getByLabelText("执行步骤") as HTMLTextAreaElement).value).toBe(
       "草稿步骤",
     );
+    expect(within(dialog).getByText("v3 · 草稿")).toBeTruthy();
+    expect(within(dialog).getByText("v2 · 已发布")).toBeTruthy();
+    expect(within(dialog).getByText("当前版本")).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: "回滚到此版本" })).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "发布草稿" }));
     await waitFor(() => expect(mocks.publishSkill).toHaveBeenCalledWith(1));
   });

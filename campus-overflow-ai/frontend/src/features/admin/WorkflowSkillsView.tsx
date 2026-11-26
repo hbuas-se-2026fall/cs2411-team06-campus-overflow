@@ -37,6 +37,11 @@ const STATUS_LABELS: Record<SkillItem["status"], string> = {
   archived: "已归档",
 };
 
+const VERSION_STATUS_LABELS: Record<string, string> = {
+  draft: "草稿",
+  published: "已发布",
+};
+
 const TASK_TYPES = [
   "moderation_scan",
   "moderation_patrol",
@@ -492,13 +497,19 @@ export function WorkflowSkillsView() {
                 <ul className="mt-2 flex flex-col gap-2">
                   {editing.versions.map((version) => (
                     <li key={version.version} className="rounded-md border border-line bg-panel px-3 py-2 text-[12px]">
-                      <span className="font-medium">v{version.version} · {version.status}</span>
+                      <span className="font-medium">
+                        v{version.version} · {VERSION_STATUS_LABELS[version.status] ?? version.status}
+                      </span>
                       <span className="ml-2 text-ink-subtle">
                         {version.published_at
                           ? new Date(version.published_at).toLocaleString("zh-CN")
-                          : "未发布"}
+                          : version.status === "published"
+                            ? "发布时间未知"
+                            : "未发布"}
                       </span>
-                      {version.status !== "draft" ? (
+                      {version.status !== "draft" && version.version === editing.current_version ? (
+                        <span className="ml-3 text-success-ink">当前版本</span>
+                      ) : version.status !== "draft" ? (
                         <button
                           type="button"
                           className="co-focusable ml-3 text-brand hover:underline"
