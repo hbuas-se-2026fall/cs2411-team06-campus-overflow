@@ -54,11 +54,11 @@ export function ReputationLedger() {
     );
   }
 
-  // 后端流水无逐行余额字段：余额按「当前总分 − 本页该行之上各行变动之和」推算（仅第 1 页精确）。
-  // TODO(接口差异)：后端 ReputationLogItem 补 balance 字段后改为直接展示
+  // 后端流水无逐行余额字段：只有第 1 页可从当前总分向前倒推；
+  // 后续分页缺少更早页面的变动，不能伪造余额。
   const rows = summary.logs.map((log, index) => {
-    const priorDelta = summary.logs
-      .slice(0, index)
+    if (summary.page !== 1) return { ...log, balance: null };
+    const priorDelta = summary.logs.slice(0, index)
       .reduce((sum, prior) => sum + prior.delta, 0);
     return { ...log, balance: summary.score - priorDelta };
   });
@@ -82,6 +82,11 @@ export function ReputationLedger() {
         </div>
       ) : (
         <>
+          {summary.page > 1 ? (
+            <p className="mt-3 text-[12px] text-ink-subtle">
+              后续分页无法精确计算逐行余额，余额列显示为 —；当前总分见上方。
+            </p>
+          ) : null}
           <table className="mt-3 w-full text-[13px]">
             <thead>
               <tr className="border-b border-line text-left text-[12px] text-ink-subtle">
@@ -107,7 +112,9 @@ export function ReputationLedger() {
                   <td className="py-2.5 text-right">
                     <DeltaCell delta={row.delta} />
                   </td>
-                  <td className="py-2.5 text-right text-ink-muted">{row.balance}</td>
+                  <td className="py-2.5 text-right text-ink-muted">
+                    {row.balance ?? "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>
