@@ -11,6 +11,10 @@ const QUICK_ENTRIES = [
   { label: "审核队列", description: "处理人工举报与 AI 发起的工单", href: "/admin/moderation/cases" },
   { label: "审批中心", description: "确认或驳回处置工单", href: "/admin/moderation/approvals" },
   { label: "Agent Loop 治理", description: "查看治理闭环、dry-run 与隔离沙箱", href: "/admin/agent" },
+  { label: "MCP 调用审计", description: "检索外部 MCP 调用与拒绝记录", href: "/admin/agent/mcp" },
+  { label: "外部 MCP 接入", description: "查看脱敏配置与高风险调用入口", href: "/admin/agent/mcp/upstream" },
+  { label: "工作流 Skill", description: "编辑、发布、启停与回滚治理路径", href: "/admin/agent/skills" },
+  { label: "运行设置", description: "控制计划内只读步骤并行", href: "/admin/agent/settings" },
   { label: "Agent 运行", description: "查看运行记录与调用链", href: "/admin/agent/runs" },
 ];
 

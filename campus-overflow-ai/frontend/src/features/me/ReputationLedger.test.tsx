@@ -78,6 +78,31 @@ describe("ReputationLedger", () => {
     });
   });
 
+  it("后续分页不伪造无法计算的逐行余额", async () => {
+    mocks.getMyReputation
+      .mockResolvedValueOnce(PAGE_ONE)
+      .mockResolvedValueOnce({
+        ...PAGE_ONE,
+        page: 2,
+        logs: [
+          {
+            delta: -3,
+            reason: "更早的声望变动",
+            ref_type: "answer",
+            ref_id: 2,
+            created_at: "2026-10-03T10:00:00+08:00",
+          },
+        ],
+      });
+    render(<ReputationLedger />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "下一页" }));
+    const row = await screen.findByRole("row", { name: /更早的声望变动/ });
+
+    expect(row.querySelectorAll("td")[3].textContent).toBe("—");
+    expect(screen.getByText(/后续分页无法精确计算逐行余额/)).toBeTruthy();
+  });
+
   it("无流水渲染空态", async () => {
     mocks.getMyReputation.mockResolvedValue({
       score: 0,

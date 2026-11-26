@@ -12,9 +12,11 @@ const checkService = async (url: string): Promise<string> => {
 };
 
 export async function GET(): Promise<Response> {
+  const backendOrigin = (process.env.BACKEND_ORIGIN ?? "http://localhost:8000").replace(/\/$/, "");
+  const agentOrigin = (process.env.AGENT_ORIGIN ?? "http://localhost:8787").replace(/\/$/, "");
   const [backend, agent] = await Promise.all([
-    checkService("http://localhost:8000/api/health"),
-    checkService("http://localhost:8787/agent/health"),
+    checkService(`${backendOrigin}/api/health`),
+    checkService(`${agentOrigin}/agent/health`),
   ]);
 
   return Response.json({

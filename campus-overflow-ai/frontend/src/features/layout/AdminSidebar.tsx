@@ -20,6 +20,10 @@ export const ADMIN_MENU_ITEMS: AdminMenuItem[] = [
   { key: "moderation-approvals", label: "审批中心", href: "/admin/moderation/approvals" },
   { key: "moderation-appeals", label: "申诉处理", href: "/admin/moderation/appeals" },
   { key: "agent-loop", label: "Agent Loop 治理", href: "/admin/agent" },
+  { key: "agent-mcp-calls", label: "MCP 调用审计", href: "/admin/agent/mcp" },
+  { key: "agent-mcp-upstream", label: "外部 MCP 接入", href: "/admin/agent/mcp/upstream" },
+  { key: "agent-skills", label: "工作流 Skill", href: "/admin/agent/skills" },
+  { key: "agent-settings", label: "运行设置", href: "/admin/agent/settings" },
   { key: "agent-assistant", label: "治理助手", href: "/admin/agent/assistant" },
   { key: "agent-runs", label: "Agent 运行", href: "/admin/agent/runs" },
 ];

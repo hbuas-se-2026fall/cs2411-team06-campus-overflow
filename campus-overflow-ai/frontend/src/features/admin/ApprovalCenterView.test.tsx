@@ -36,6 +36,12 @@ const CONTENT_CASE = {
   ...USER_CASE, id: 10, target_type: "question", target_id: 3,
   reason: "垃圾广告内容", decision_trace: null, agent_run_id: null,
 };
+const MCP_CASE = {
+  ...USER_CASE, id: 11, target_type: "mcp_tool", target_id: 0,
+  reason: "外部 MCP 高风险工具调用：knowledge/publish",
+  snapshot: "{\"server\":\"knowledge\",\"tool\":\"publish\"}",
+  decision_trace: null, agent_run_id: null,
+};
 
 beforeEach(() => {
   mocks.fetchModerationCases.mockReset().mockResolvedValue({
@@ -107,6 +113,18 @@ describe("ApprovalCenterView 审批中心", () => {
       const contentOptions = Array.from(contentSelect.options).map((option) => option.value);
       expect(contentOptions).toEqual(["", "hide", "delete", "skip"]);
     });
+  });
+
+  it("外部 MCP 工单只允许驳回，不展示内容处置动作", async () => {
+    mocks.fetchModerationCases.mockResolvedValue({
+      items: [MCP_CASE], total: 1, page: 1, page_size: 20,
+    });
+    render(<ApprovalCenterView />);
+    fireEvent.click(await screen.findByRole("button", { name: /#11 外部 MCP 工具 #0/ }));
+
+    const select = (await screen.findByLabelText("处置动作")) as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(["", "skip"]);
+    expect(screen.getByText(/本阶段仅登记待确认工单/)).toBeInTheDocument();
   });
 
   it("hide（非 danger）直接提交；成功后 Toast 并刷新队列", async () => {

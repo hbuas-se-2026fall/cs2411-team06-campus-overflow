@@ -20,7 +20,7 @@
 - [x] T-22B 管理接口：列表/详情、创建草稿、编辑、发布（新版本并置 current_version）、启停、归档删除、历史版本；仅 active 管理员，全部审计。验收：pytest 覆盖权限、版本递增、归档与发布回滚。专项 8 项、相邻治理回归 69 项、ruff、lint-imports 5 contracts 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-22B-管理接口.md`。
 - [x] T-22C 内部读取与 Agent 注入：`GET /internal/agent/skills` 与版本详情；Agent 按任务类型/课程匹配，≤3 条、≤4000 字符、额外 token ≤1500，仅展开第 1 条详情，30s TTL，失败降级为空。验收：vitest 覆盖匹配优先级、截断、缓存过期与后端失败。后端专项 3 项 + 相邻 8 项、ruff、lint-imports 5 contracts；Agent 专项 8 项、规划回归 37 项、typecheck、eslint 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-22C-内部读取与Agent注入.md`。
 - [ ] T-22D 提案生成：成功运行结束后从计划步骤/工具序列/检查项生成 draft 版本，过滤敏感与用户原文，附 `source_run_id`；AI 不可直接发布。验收：单测覆盖敏感过滤、来源关联与未发布不注入。
-- [ ] T-22E 管理端最小页面：skill 列表、编辑、发布/驳回、启停、归档删除与版本回看。验收：组件测试 + 手动走查。
+- [x] T-22E 管理端最小页面：新增 `/admin/agent/skills`，支持状态/任务/课程筛选、分页、创建/编辑草稿、发布、回滚、启停、归档与版本回看。后端无“驳回”接口，页面不伪造该动作，保留草稿即不发布。WorkflowSkillsView 8 项覆盖筛选、创建、草稿优先加载、详情失败、发布刷新、启停、归档与末页回退；待人工评审。
 - [ ] T-22F 量化验收：新增 `bench:skill-reuse` 固定 20 条治理样本，关闭/开启对比；重复检索次数下降 ≥50%、输入 token 下降 ≥30%、成功率不降、P95 不劣化才允许默认开启。验收：对比报告入审查记录；未达标保持 `SKILL_INJECTION_ENABLED=false`。
 
 
@@ -30,7 +30,7 @@
 
 - [x] SA-07A 执行器依赖分层与并发：`agent/src/loop/plan-executor.ts` 增加 `$sN` 依赖分析、同层并发、单计划在途上限 4；含 `propose*` 的计划回退串行；8 步 / 12 次 / 60 秒 / 180 秒不变。专项 9 项、typecheck、eslint 通过；待人工审查；见 `agent/tests/plan-parallel.test.ts`。
 - [x] SA-07B 实例信号量、预算与审计串行：进程级在途上限 12（`MAX_INFLIGHT_TOOL_CALLS`）；并发下预算不超发；401/403、策略错误、取消终止全部在途；`PersistentRunAudit` 事件写入串行、`sequence_no` 严格递增。审计串行专项 1 项、相邻回归 103 项、typecheck、eslint 通过；待人工审查；见 `agent/tests/persistent-audit-serial.test.ts`。
-- [x] SA-07C 全局开关：后端新增 `system_settings` 表与迁移 `sa07c_system_settings`，管理员 `GET/PUT /api/governance/settings/plan-parallel` 与内部只读 `GET /internal/agent/runtime-config`；Agent `runtime-config.ts` 30s TTL、失败沿用缓存/默认关闭并接线 `runPlannedTools`；前端设置页下期接入。专项 5 项、Agent 配置 6 项、typecheck/eslint/ruff/lint-imports 通过；见 docs/审查记录/计划内并行/SA-07C-07E.md。
+- [x] SA-07C 全局开关：后端新增 `system_settings` 表与迁移 `sa07c_system_settings`，管理员 `GET/PUT /api/governance/settings/plan-parallel` 与内部只读 `GET /internal/agent/runtime-config`；Agent `runtime-config.ts` 30s TTL、失败沿用缓存/默认关闭并接线 `runPlannedTools`；管理员设置页已于 2026-11-26 接入。专项 5 项、Agent 配置 6 项、typecheck/eslint/ruff/lint-imports 通过；见 docs/审查记录/计划内并行/SA-07C-07E.md。
 - [x] SA-07D 验收：专项 11 项覆盖依赖不并发、单计划上限、实例上限、预算、失败传播、治理建单不重不漏；`npm run bench:plan-parallel` 同计划 8 步串行 p95 1025.1ms → 并行 259.7ms，下降 74.7%（门槛 30%）；见 docs/审查记录/计划内并行/SA-07C-07E.md。
 - [x] SA-07E 收口：agent 相关 53 项、backend 设置 5 项与 governance internal 54 项回归、agent typecheck/eslint、backend ruff/lint-imports 全部通过；status 已同步，审查记录已落；见 docs/审查记录/计划内并行/SA-07C-07E.md。
 
@@ -184,7 +184,7 @@
 > 完成后在 `- [ ]` 中打勾。
 >
 > **一期实施范围总注**：本期只做业务后端。Phase 1~2 为本期实施内容（后端模块与 pytest）；任务描述中涉及前端页面的部分随第二阶段前端实现一并验收；Phase 3 整体为第二阶段，本期不启动。
-> **二期实施范围总注（2026-11-24 更新）**：第二期实施 Phase 3（Agent 服务与治理逻辑）；T-11～T-13 已完成。T-14 M-01～M-04、T-15-A～G、T-17 N-01～N-07 已按子项交付并通过本地测试；父任务不代替子项验收，剩余 T-16-C/D 运维项与真实环境验收（真实 MySQL、真实模型、真实外部 MCP Server、多实例容量）。Phase 4 的 T-19/T-20 已完成本地收口，T-18 部署仍推迟。前端 F-C1～F-C5 已完成、F-C6 未完成。
+> **二期实施范围总注（2026-11-26 更新）**：第二期实施 Phase 3（Agent 服务与治理逻辑）；T-11～T-13 已完成。T-14 M-01～M-04、T-15-A～G、T-16-C/D、T-17 N-01～N-07 已按子项交付并通过本地测试；父任务不代替真实环境验收（真实 MySQL、真实模型、真实外部 MCP Server、多实例容量）。Phase 4 的 T-18 部署件已本地完成，实机验收仍待执行；T-19/T-20 已完成本地收口。前端 F-C1～F-C6 已完成本地实现与门禁，待人工评审。
 
 ## Phase 1: 项目搭建与用户基础
 
@@ -328,6 +328,7 @@
 - [ ] 【第三期】T-18 Docker Compose 部署（v2 修订：一期范围 = backend + MySQL；frontend / agent 容器化随第二阶段补充；2026-10-06 v3 修订：整体推迟至第三期部署阶段）
   - 目标：backend + MySQL 容器化；Nginx 统一入口（可选）；不含 Redis（第一阶段）
   - 完成判定：`docker compose up` 一键启动后服务健康检查通过，核心问答主流程可演示
+  - 2026-11-26 本地交付：frontend/agent/backend 镜像、五服务生产 Compose、Nginx HTTP/TLS 模板、迁移及备份/恢复脚本已补齐；修正 Agent 的 `BACKEND_BASE_URL` 与前端聚合健康检查地址。当前机器无 Docker、域名、证书、真实模型和云主机，未执行容器启动与生产验收，故不勾完成。
 
 - [x] 【第三期】T-19 测试补齐（2026-11-24 收口）：后端全量 `uv run pytest -q` 863 passed / 29 skipped（跳过项为需真实 MySQL/Docker/外部服务用例，归真实环境验收）；Agent 106 文件 835 passed；前端 82 文件 514 passed；后端 ruff/lint-imports 与前端/Agent tsc/eslint 全绿。认证、权限、问答、互动、通知、治理审批、MCP 白名单与内部接口边界均有专项覆盖。
   - 目标：认证、角色与助教能力位、问答、投票、采纳、通知核心流程 pytest；治理建表与占位接口的边界测试（501 与表结构约束）
@@ -343,9 +344,9 @@
 
 完整 PR27 已本地合并，前端补完在独立 `feat/frontend-completion` 分支实施，不 push，完成后统一人工审查。范围与方案见 `docs/前端补完计划.md`、plan §5 补充；逐项状态和验证见 `.trae/specs/build-frontend-mvp/tasks.md` 的 F-C1～F-C6。
 
-- [ ] F-C 前端正式契约接入与核心页面补完（子任务按专项清单顺序）：用户筛选、本人课程/资格/课程名、用户内容/标签、助教申请审核、实际问答操作分页及真实缺口复核。完成判定：适用前端测试/lint/rules/build 通过，设计/验证/决策记录就绪；无接口及延期功能仍明确暂缓，不把整个前端 MVP 或人工审查勾为通过。
+- [x] F-C 前端正式契约接入与核心页面补完（本地实现验证完成，待人工评审）：用户筛选、本人课程/资格/课程名、用户内容/标签、助教申请审核、问答分页与互动、F-C6 声望余额纠偏、B1 守卫复核、管理端 MCP 审计/外部接入、计划并行设置及 T-22E Skill 管理页已完成。前端 95 文件 600 项、tsc/eslint/rules/build 通过；证据见 `docs/审查记录/前端最终收口/审查记录.md`。真实浏览器验收与人工评审未代替。
 
-本批次不推进 T-14～T-18，不以单元测试替代真实 MySQL、部署或人工界面验收；T-19/T-20 整体验收保持原阶段安排。
+本批次补齐 T-18 可本地交付的部署件，但不以单元测试或配置解析替代真实 MySQL、容器启动、生产环境或人工界面验收；T-18 保持未完成，T-19/T-20 整体验收保持原阶段安排。
 
 ## Agent 受控运行主干（2026-10-18 用户确认，当前执行入口）
 

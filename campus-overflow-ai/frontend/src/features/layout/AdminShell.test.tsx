@@ -82,6 +82,16 @@ describe("AdminSidebar 菜单渲染", () => {
   it("Agent 运行与治理助手入口可访问", () => {
     render(<AdminSidebar />);
     expect(screen.getByRole("link", { name: "Agent Loop 治理" }).getAttribute("href")).toBe("/admin/agent");
+    expect(screen.getByRole("link", { name: "MCP 调用审计" }).getAttribute("href")).toBe("/admin/agent/mcp");
+    expect(screen.getByRole("link", { name: "外部 MCP 接入" }).getAttribute("href")).toBe(
+      "/admin/agent/mcp/upstream",
+    );
+    expect(screen.getByRole("link", { name: "运行设置" }).getAttribute("href")).toBe(
+      "/admin/agent/settings",
+    );
+    expect(screen.getByRole("link", { name: "工作流 Skill" }).getAttribute("href")).toBe(
+      "/admin/agent/skills",
+    );
     expect(screen.getByRole("link", { name: "Agent 运行" }).getAttribute("href")).toBe("/admin/agent/runs");
     expect(screen.getByRole("link", { name: "治理助手" }).getAttribute("href")).toBe("/admin/agent/assistant");
   });
@@ -106,13 +116,17 @@ describe("activeAdminMenuItem（最长前缀优先）", () => {
   });
 
   it("菜单清单含继承的教学管理入口", () => {
-    expect(ADMIN_MENU_ITEMS).toHaveLength(10);
+    expect(ADMIN_MENU_ITEMS).toHaveLength(14);
     expect(ADMIN_MENU_ITEMS.find(item => item.key === "teaching")?.href).toBe("/teacher/courses");
     expect(ADMIN_MENU_ITEMS.filter((item) => item.disabled)).toEqual([]);
   });
 
   it("Agent Loop 与运行记录使用最长路径匹配", () => {
     expect(activeAdminMenuItem("/admin/agent")?.key).toBe("agent-loop");
+    expect(activeAdminMenuItem("/admin/agent/mcp")?.key).toBe("agent-mcp-calls");
+    expect(activeAdminMenuItem("/admin/agent/mcp/upstream")?.key).toBe("agent-mcp-upstream");
+    expect(activeAdminMenuItem("/admin/agent/settings")?.key).toBe("agent-settings");
+    expect(activeAdminMenuItem("/admin/agent/skills")?.key).toBe("agent-skills");
     expect(activeAdminMenuItem("/admin/agent/runs")?.key).toBe("agent-runs");
     expect(activeAdminMenuItem("/admin/agent/runs/42")?.key).toBe("agent-runs");
   });
