@@ -31,7 +31,7 @@ services:
       MCP_RATE_LIMIT_PER_MINUTE: "60"
       MCP_EXTERNAL_CLIENTS: ${MCP_EXTERNAL_CLIENTS:-}
       # 仅允许访问 FastAPI 白名单接口；不注入任何 DB_* / MYSQL_* 变量。
-      AGENT_INTERNAL_BASE_URL: ${AGENT_INTERNAL_BASE_URL:-http://host.docker.internal:8000}
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://host.docker.internal:8000}
       AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"

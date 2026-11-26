@@ -84,6 +84,18 @@ describe("AdminOverviewView", () => {
     expect(screen.getByRole("link", { name: /Agent Loop 治理/ }).getAttribute("href")).toBe(
       "/admin/agent",
     );
+    expect(screen.getByRole("link", { name: /MCP 调用审计/ }).getAttribute("href")).toBe(
+      "/admin/agent/mcp",
+    );
+    expect(screen.getByRole("link", { name: /外部 MCP 接入/ }).getAttribute("href")).toBe(
+      "/admin/agent/mcp/upstream",
+    );
+    expect(screen.getByRole("link", { name: /运行设置/ }).getAttribute("href")).toBe(
+      "/admin/agent/settings",
+    );
+    expect(screen.getByRole("link", { name: /工作流 Skill/ }).getAttribute("href")).toBe(
+      "/admin/agent/skills",
+    );
     expect(screen.getByRole("link", { name: /Agent 运行/ }).getAttribute("href")).toBe(
       "/admin/agent/runs",
     );

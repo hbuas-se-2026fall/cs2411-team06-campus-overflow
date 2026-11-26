@@ -3,10 +3,11 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import { GET } from "./route";
 
 const mockFetch = (status: number) =>
-  vi.fn(async () => new Response("{}", { status }));
+  vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("GET /api/health", () => {
@@ -33,5 +34,19 @@ describe("GET /api/health", () => {
     const body = await res.json();
     expect(body.data.agent).toBe("down");
     expect(body.data.backend).toBe("up");
+  });
+
+  it("uses container service origins from environment", async () => {
+    vi.stubEnv("BACKEND_ORIGIN", "http://backend:8000");
+    vi.stubEnv("AGENT_ORIGIN", "http://agent:8787");
+    const fetchMock = mockFetch(200);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await GET();
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://backend:8000/api/health",
+      "http://agent:8787/agent/health",
+    ]);
   });
 });

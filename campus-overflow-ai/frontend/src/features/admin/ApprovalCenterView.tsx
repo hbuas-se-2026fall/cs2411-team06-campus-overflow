@@ -46,11 +46,14 @@ const CONTENT_ACTIONS = [
   { value: "delete", label: "删除内容" },
   { value: "skip", label: "驳回工单（不处置）" },
 ];
+const MCP_ACTIONS = [
+  { value: "skip", label: "驳回申请（不执行）" },
+];
 // 需二次确认的高风险动作（C-06）
 const DANGEROUS = new Set(["delete", "ban", "ban_temp"]);
 
 const TARGET_LABELS: Record<string, string> = {
-  question: "问题", answer: "回答", comment: "评论", user: "用户",
+  question: "问题", answer: "回答", comment: "评论", user: "用户", mcp_tool: "外部 MCP 工具",
 };
 
 export function ApprovalCenterView() {
@@ -83,10 +86,14 @@ export function ApprovalCenterView() {
     try {
       await resolveModerationCase(selected.id, {
         decision,
-        manager_feedback: feedback.trim() || "管理员处置",
+        manager_feedback: feedback.trim()
+          || (selected.target_type === "mcp_tool" ? "管理员驳回外部 MCP 调用申请" : "管理员处置"),
         ...(decision === "ban_temp" ? { duration_days: Number(durationDays) } : {}),
       });
-      setToast({ tone: "success", message: "已处置并通知当事人" });
+      setToast({
+        tone: "success",
+        message: selected.target_type === "mcp_tool" ? "已驳回 MCP 调用申请" : "已处置并通知当事人",
+      });
       setConfirming(false);
       setDecision("");
       setFeedback("");
@@ -100,7 +107,11 @@ export function ApprovalCenterView() {
   }
 
   const actionOptions = selected
-    ? (selected.target_type === "user" ? USER_ACTIONS : CONTENT_ACTIONS)
+    ? (selected.target_type === "user"
+      ? USER_ACTIONS
+      : selected.target_type === "mcp_tool"
+        ? MCP_ACTIONS
+        : CONTENT_ACTIONS)
     : [];
 
   return (
@@ -192,6 +203,11 @@ export function ApprovalCenterView() {
                   <GovernanceApprovalV2Panel key={selected.id} requestId={v2RequestId(selected.snapshot) ?? ""} />
                 ) : selected.status === "pending" || selected.status === "agent_proposed" ? (
                   <>
+                    {selected.target_type === "mcp_tool" ? (
+                      <div className="rounded-md border border-warning bg-warning-soft px-4 py-3 text-[13px] text-warning-ink">
+                        本阶段仅登记待确认工单，不提供外部 MCP 调用执行入口；可驳回申请，或由运维按部署流程处理。
+                      </div>
+                    ) : null}
                     <Select
                       label="处置动作"
                       value={decision}

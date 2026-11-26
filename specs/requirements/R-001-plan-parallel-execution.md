@@ -89,12 +89,12 @@
 | 审计并发写入 | 仅审计写入串行，不改后端协议、不加限流 | 串行队列引入毫秒级排队 | 用户 |
 | 任务编号 | SA-07 | 与 tasks.md 已对齐 | 助手 |
 | 开关粒度和存储 | 全局开关，仅管理员可改，存后端配置表 | 多实例需读取同一配置 | 用户 |
-| 设置页交付 | 本期只留接口，前端下期接入 | 本期无法从界面操作 | 用户 |
+| 设置页交付 | 接口先行；管理员设置页已于 2026-11-26 接入 | 可从管理员端查看并切换 | 用户 |
 
 ## 11. 交付反馈
 
 - 验收项结果：1～6 由 `agent/tests/plan-parallel.test.ts` 11 项覆盖；第 7 项由 `npm run bench:plan-parallel` 输出，p95 1025.1ms → 259.7ms，下降 74.7%。
 - 证据：`agent/tests/plan-parallel.test.ts`、`agent/tests/runtime-config.test.ts`、`backend/tests/test_plan_parallel_setting.py`、`docs/审查记录/计划内并行/SA-07C-07E.md`。
 - 未验证：真实后端并发容量、真实模型下的端到端时延、生产环境开启后的稳定性。
-- 变更与决策：全局开关存 `system_settings`，仅管理员可写；Agent 30s TTL 读取，失败沿用缓存/默认关闭；前端设置页下期接入。
+- 变更与决策：全局开关存 `system_settings`，仅管理员可写；Agent 30s TTL 读取，失败沿用缓存/默认关闭；管理员设置页已于 2026-11-26 接入。
 - 风险与回退：生产开启前按 4C4G 实测复核默认并发；异常时管理员关闭开关或设置 `PLAN_PARALLEL_ENABLED=false` 回退串行。
