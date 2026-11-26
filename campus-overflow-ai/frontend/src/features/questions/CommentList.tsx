@@ -25,6 +25,10 @@ import { isAuthorOf } from "@/shared/utils/ownership";
 type LoadStatus = "loading" | "ready" | "error";
 const PAGE_SIZE = 20;
 
+function pageForTotal(total: number): number {
+  return Math.max(1, Math.ceil(total / PAGE_SIZE));
+}
+
 export function CommentList({
   targetType,
   targetId,
@@ -60,6 +64,12 @@ export function CommentList({
           ? await listQuestionComments(targetId, params)
           : await listAnswerComments(targetId, params);
         if (cancelled) return;
+        const lastPage = pageForTotal(result.total);
+        if (page > lastPage) {
+          setTotal(result.total);
+          setPage(lastPage);
+          return;
+        }
         setItems(result.items);
         setTotal(result.total);
         setStatus("ready");
@@ -99,8 +109,9 @@ export function CommentList({
         reload();
       } else {
         setBody("");
-        if (page === 1) reload();
-        else setPage(1);
+        const createdPage = pageForTotal(total + 1);
+        if (page === createdPage) reload();
+        else setPage(createdPage);
       }
     } catch (caught) {
       // 400 空内容 / 400 父评论不合法（回复的回复）/ 403 封禁
