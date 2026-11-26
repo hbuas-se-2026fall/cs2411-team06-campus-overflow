@@ -20,13 +20,26 @@ from app.modules.courses.schemas import (
 from app.modules.governance import domain, repository, service_approvals, service_notify
 from app.modules.governance.schemas import (
     AgentRunOut,
-    MemoryItemOut,
+    ChatStreamEventAck,
+    ChatStreamEventCreateRequest,
+    ChatStreamOut,
+    ChatStreamReadOut,
+    McpCallCreateRequest,
+    McpCallOut,
     ModerationCaseOut,
     PatrolFeedbackItem,
+    PatrolMarkCreateRequest,
+    PatrolMarkOut,
     PatrolNoteCreateItem,
     PatrolNoteOut,
     ReportSaveRequest,
     RunEventOut,
+    SandboxEventCreateRequest,
+    SandboxEventOut,
+    SlotLeaseClaimRequest,
+    SlotLeaseOut,
+    SlotWaitOut,
+    SlotWaitRequest,
     ToolCallOut,
 )
 from app.modules.identity import service as identity_service
@@ -211,41 +224,6 @@ def record_run_event(
     return result
 
 
-def write_memory(
-    db: Session, user_id: int, memory_type: str, content: str,
-    course_id: int | None, source_run_id: str | None, trace_id: str,
-) -> MemoryItemOut:
-    """写入记忆：用户必须存在；类型白名单；敏感内容拒绝并留拦截日志（不含原文）。"""
-    identity_service.get_by_id(db, user_id)  # 不存在 → 404
-    domain.ensure_valid_memory_type(memory_type)
-    if domain.is_sensitive_content(content):
-        # 拦截日志只留元信息，不落内容原文（C-07）
-        action_logger.warning(
-            "agent_memory_intercepted user_id=%s trace_id=%s reason=sensitive_keyword",
-            user_id, trace_id,
-        )
-        raise domain.MemorySensitiveError()
-    item = repository.create_memory(db, user_id, memory_type, content, course_id, source_run_id)
-    db.commit()
-    return item
-
-
-def list_memories(
-    db: Session, user_id: int, task_type: str | None,
-    memory_type: str | None, course_id: int | None,
-) -> list[MemoryItemOut]:
-    """读取相关记忆：用户/课程/类型过滤（plan §5）；task_type 经领域映射取相关类型。"""
-    identity_service.get_by_id(db, user_id)  # 不存在 → 404
-    if memory_type:
-        domain.ensure_valid_memory_type(memory_type)
-        memory_types = [memory_type]
-    elif task_type:
-        memory_types = sorted(domain.TASK_MEMORY_RELEVANCE.get(task_type, set()))
-    else:
-        memory_types = None
-    return repository.list_memories(db, user_id, course_id, memory_types)
-
-
 # ---------- 审批工单（US-13 / US-14 / C-06：只建工单，绝不执行） ----------
 
 
@@ -388,6 +366,8 @@ def apply_moderation_action(
     elif decision == domain.CASE_DECISION_WARN:
         reason = f"治理工单 #{case.id} 警告：{case.reason}"[:BAN_REASON_MAX_LEN]
         identity_service.moderation_warn_user(db, target_id, reason, admin_id)
+    elif decision == domain.CASE_DECISION_EDIT:
+        qa_service.moderation_require_revision(db, target_type, target_id)
     else:  # pragma: no cover - 白名单已在入口保证
         raise domain.CaseDecisionError("不支持的处置动作")
 
@@ -619,6 +599,62 @@ def create_patrol_case(
     return case
 
 
+def mark_patrol_content(
+    db: Session, req: PatrolMarkCreateRequest, trace_id: str,
+) -> PatrolMarkOut:
+    """低风险内容打标（T-15-F）：仅可见内容可打标，同目标覆盖最新评估。
+
+    只写标记表，不修改内容行，因此不影响可见性与作者编辑时间。
+    """
+    if qa_service.probe_moderation_target(db, req.target_type, req.target_id) != "ready":
+        raise domain.CaseTargetNotReadyError("目标内容不可见或已处置，跳过打标")
+    mark = repository.upsert_moderation_mark(
+        db, req.target_type, req.target_id, req.risk_level,
+        req.reason, req.agent_run_id, trace_id,
+    )
+    db.commit()
+    action_logger.info(
+        "patrol_mark_saved target=%s/%s risk=%s trace_id=%s",
+        req.target_type, req.target_id, req.risk_level, trace_id,
+    )
+    return mark
+
+
+def list_moderation_marks(db: Session, limit: int = 100) -> list[PatrolMarkOut]:
+    """管理员只读：最近低风险打标列表。"""
+    return repository.list_moderation_marks(db, limit)
+
+
+# ---------- MCP 调用审计（T-17 N-04 / US-18） ----------
+
+
+def record_mcp_call(
+    db: Session, req: McpCallCreateRequest, trace_id: str,
+) -> McpCallOut:
+    """追加 MCP 调用审计；只存脱敏摘要，不记录凭证与原始参数。"""
+    record = repository.insert_mcp_call(
+        db, client_name=req.client_name, tool_name=req.tool_name, status=req.status,
+        args_summary=req.args_summary, result_summary=req.result_summary,
+        error_summary=req.error_summary, duration_ms=req.duration_ms,
+        trace_id=req.trace_id or trace_id,
+    )
+    db.commit()
+    action_logger.info(
+        "mcp_call_recorded client=%s tool=%s status=%s trace_id=%s",
+        req.client_name, req.tool_name, req.status, req.trace_id or trace_id,
+    )
+    return record
+
+
+def list_mcp_calls(
+    db: Session, page: int = 1, page_size: int = 20,
+    client_name: str | None = None, tool_name: str | None = None,
+    status: str | None = None,
+) -> tuple[list[McpCallOut], int]:
+    """管理员分页检索 MCP 调用审计。"""
+    return repository.list_mcp_calls(db, page, page_size, client_name, tool_name, status)
+
+
 # ---------- 夜间离线整理（N-1/N-2） ----------
 
 
@@ -714,3 +750,316 @@ def retract_patrol_note(db: Session, note_id: int, trace_id: str) -> PatrolNoteO
     db.commit()
     action_logger.info("patrol_note_retracted note_id=%s trace_id=%s", note_id, trace_id)
     return PatrolNoteOut.model_validate(row)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _claim_available_slot(
+    db: Session, *, kind: str, capacity: int, job_id: str, instance_id: str,
+    ttl_seconds: int, now: datetime,
+) -> tuple[int, str, datetime] | None:
+    """在容量内原子占用一个槽位；容量已满返回 None。
+
+    先尝试复用过期/本人持有的槽位，再在容量内插入新行；插入冲突由主键
+    约束兜底，失败后重试，最多 5 次。插入使用 SAVEPOINT，冲突回滚不会
+    破坏调用方已持有的队列锁。
+    """
+    for _ in range(5):
+        token = uuid.uuid4().hex
+        expires = now + timedelta(seconds=ttl_seconds)
+        slot_no = repository.find_claimable_slot(db, kind, capacity, job_id, now)
+        if slot_no is not None:
+            if repository.claim_slot_row(
+                db, kind, slot_no,
+                owner_instance=instance_id, job_id=job_id,
+                fencing_token=token, expires_at=expires, now=now,
+            ):
+                return slot_no, token, expires
+            continue
+        # 重试预算已用尽的 job 不得新开槽位绕过上限
+        if repository.has_exhausted_job_lease(db, kind, job_id):
+            return None
+        if repository.count_kind_slots(db, kind, capacity) >= capacity:
+            return None
+        next_no = repository.next_free_slot_no(db, kind, capacity)
+        if next_no is None:
+            return None
+        try:
+            with db.begin_nested():
+                repository.insert_slot_lease(
+                    db, kind=kind, slot_no=next_no, owner_instance=instance_id,
+                    job_id=job_id, fencing_token=token, expires_at=expires,
+                )
+            return next_no, token, expires
+        except IntegrityError:
+            continue
+    return None
+
+
+def claim_slot_lease(db: Session, req: SlotLeaseClaimRequest) -> SlotLeaseOut | None:
+    """跨实例原子占用槽位；容量已满返回 None。"""
+    acquired = _claim_available_slot(
+        db, kind=req.kind, capacity=req.capacity, job_id=req.job_id,
+        instance_id=req.instance_id, ttl_seconds=req.ttl_seconds, now=_now(),
+    )
+    if acquired is None:
+        return None
+    slot_no, token, expires = acquired
+    db.commit()
+    return SlotLeaseOut(
+        kind=req.kind, slot_no=slot_no, job_id=req.job_id,
+        fencing_token=token, lease_expires_at=expires,
+    )
+
+
+def renew_slot_lease(
+    db: Session, kind: str, slot_no: int, fencing_token: str, ttl_seconds: int,
+) -> bool:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    renewed = repository.renew_slot_lease(
+        db, kind, slot_no, fencing_token,
+        now + timedelta(seconds=ttl_seconds), now,
+    )
+    db.commit()
+    return renewed
+
+
+def release_slot_lease(
+    db: Session, kind: str, slot_no: int, fencing_token: str,
+) -> bool:
+    released = repository.delete_slot_lease(db, kind, slot_no, fencing_token)
+    db.commit()
+    return released
+
+
+# ---------- 全局问答排队（P0-5） ----------
+
+
+def _lease_from_waiter(waiter) -> SlotLeaseOut:
+    """授予票据转成租约出参：租期从授予时刻重新计算。"""
+    return SlotLeaseOut(
+        kind=waiter.kind, slot_no=waiter.slot_no, job_id=waiter.job_id,
+        fencing_token=waiter.fencing_token,
+        lease_expires_at=waiter.granted_at + timedelta(seconds=waiter.ttl_seconds),
+    )
+
+
+def _take_wait(db: Session, waiter, now: datetime) -> SlotWaitOut:
+    """解析票据：granted 立即消费，waiting 报位置，过期作废。"""
+    ticket_id, job_id = waiter.id, waiter.job_id
+    if waiter.status == "granted":
+        lease = _lease_from_waiter(waiter)
+        if lease.lease_expires_at <= now:
+            # 授予后长时间未被取走：回收槽位，票据作废
+            repository.delete_slot_lease(
+                db, lease.kind, lease.slot_no, lease.fencing_token,
+            )
+            repository.delete_slot_waiter(db, waiter)
+            return SlotWaitOut(ticket_id=ticket_id, job_id=job_id, status="expired")
+        result = SlotWaitOut(
+            ticket_id=ticket_id, job_id=job_id, status="granted", lease=lease,
+        )
+        repository.delete_slot_waiter(db, waiter)
+        return result
+    if waiter.expires_at <= now:
+        repository.delete_slot_waiter(db, waiter)
+        return SlotWaitOut(ticket_id=ticket_id, job_id=job_id, status="expired")
+    return SlotWaitOut(
+        ticket_id=ticket_id, job_id=job_id, status="waiting",
+        position=repository.count_waiting_position(db, waiter.kind, ticket_id),
+    )
+
+
+def _promote_waiters(db: Session, kind: str, now: datetime) -> None:
+    """严格按 FIFO 晋升队首；容量不足即停止，过期的队首直接作废。"""
+    for _ in range(128):
+        head = repository.find_waiting_head(db, kind, for_update=True)
+        if head is None:
+            return
+        if head.expires_at <= now:
+            repository.delete_slot_waiter(db, head)
+            continue
+        acquired = _claim_available_slot(
+            db, kind=head.kind, capacity=head.capacity, job_id=head.job_id,
+            instance_id=head.instance_id, ttl_seconds=head.ttl_seconds, now=now,
+        )
+        if acquired is None:
+            return
+        slot_no, token, _expires = acquired
+        repository.grant_slot_waiter(
+            db, head, slot_no=slot_no, fencing_token=token, now=now,
+        )
+
+
+def enqueue_slot_wait(db: Session, req: SlotWaitRequest) -> SlotWaitOut:
+    """入队并尝试晋升；队首且有空槽时直接返回租约，否则返回等待位置。"""
+    now = _now()
+    waiter = repository.insert_slot_waiter(
+        db, kind=req.kind, job_id=req.job_id, instance_id=req.instance_id,
+        capacity=req.capacity, ttl_seconds=req.ttl_seconds,
+        enqueued_at=now, expires_at=now + timedelta(seconds=req.wait_seconds),
+    )
+    _promote_waiters(db, req.kind, now)
+    result = _take_wait(db, waiter, now)
+    db.commit()
+    return result
+
+
+def poll_slot_wait(db: Session, ticket_id: int) -> SlotWaitOut:
+    """轮询票据：队首可能被本机晋升；已授予则取走租约，过期返回 expired。"""
+    now = _now()
+    waiter = repository.get_slot_waiter(db, ticket_id, for_update=True)
+    if waiter is None:
+        raise domain.DecisionNotFoundError("排队票据不存在或已过期")
+    kind, job_id = waiter.kind, waiter.job_id
+    _promote_waiters(db, kind, now)
+    waiter = repository.get_slot_waiter(db, ticket_id)
+    result = (
+        SlotWaitOut(ticket_id=ticket_id, job_id=job_id, status="expired")
+        if waiter is None else _take_wait(db, waiter, now)
+    )
+    db.commit()
+    return result
+
+
+def cancel_slot_wait(db: Session, ticket_id: int) -> None:
+    """放弃排队：已授予但未取走的票据同时回收槽位。"""
+    waiter = repository.get_slot_waiter(db, ticket_id, for_update=True)
+    if waiter is None:
+        raise domain.DecisionNotFoundError("排队票据不存在或已过期")
+    if waiter.status == "granted" and waiter.slot_no is not None:
+        repository.delete_slot_lease(
+            db, waiter.kind, waiter.slot_no, waiter.fencing_token or "",
+        )
+    repository.delete_slot_waiter(db, waiter)
+    db.commit()
+
+
+# ---------- 聊天可恢复流（P0-3） ----------
+
+# 流保留 30 分钟：足够断线续接与跨实例恢复，过期后读取一律 404。
+CHAT_STREAM_TTL = timedelta(minutes=30)
+CHAT_STREAM_TERMINAL = frozenset({"succeeded", "failed", "cancelled"})
+
+
+def _chat_stream_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def ensure_chat_stream(
+    db: Session, user_id: int, request_id: str,
+    agent_run_id: str | None = None, trace_id: str | None = None,
+) -> ChatStreamOut:
+    """幂等登记：已有同用户同请求 id 的流直接返回，不覆盖原运行标识。"""
+    now = _chat_stream_now()
+    repository.delete_expired_chat_streams(db, user_id, now)
+    existing = repository.get_chat_stream(db, user_id, request_id)
+    if existing is not None:
+        db.commit()
+        return existing
+    try:
+        created = repository.create_chat_stream(
+            db, user_id, request_id, agent_run_id, trace_id, now + CHAT_STREAM_TTL,
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = repository.get_chat_stream(db, user_id, request_id)
+        if existing is None:
+            raise
+        return existing
+    return created.model_copy(update={"created": True})
+
+
+def append_chat_stream_event(
+    db: Session, user_id: int, request_id: str, req: ChatStreamEventCreateRequest,
+) -> ChatStreamEventAck:
+    """追加事件：重复序号同内容幂等；序号必须连续；终止事件迁移状态。"""
+    now = _chat_stream_now()
+    repository.delete_expired_chat_streams(db, user_id, now)
+    current = repository.get_chat_stream(db, user_id, request_id, for_update=True)
+    if current is None:
+        db.rollback()
+        raise domain.ChatStreamNotFoundError()
+    duplicate = repository.get_chat_stream_event(db, user_id, request_id, req.seq)
+    if duplicate is not None:
+        if duplicate.event_type != req.event_type or duplicate.data != req.data:
+            db.rollback()
+            raise domain.ChatStreamEventConflictError()
+        db.commit()
+        return repository.chat_stream_event_ack(req.seq, current.status, True)
+    if current.status in CHAT_STREAM_TERMINAL:
+        db.rollback()
+        raise domain.ChatStreamStateError("聊天流已结束，不能继续追加事件")
+    history = repository.list_chat_stream_events(db, user_id, request_id, 0)
+    last_seq = history[-1].seq if history else 0
+    if req.seq != last_seq + 1:
+        db.rollback()
+        raise domain.ChatStreamStateError("事件序号不连续")
+    event = repository.create_chat_stream_event(
+        db, user_id, request_id, req.seq, req.event_type, req.data,
+    )
+    if event is None:
+        db.rollback()
+        raise domain.ChatStreamNotFoundError()
+    status = current.status
+    if req.event_type == "done":
+        status = "succeeded"
+    elif req.event_type == "error":
+        status = "cancelled" if current.cancel_requested else "failed"
+    if status != current.status:
+        repository.update_chat_stream_status(db, user_id, request_id, status)
+    db.commit()
+    return repository.chat_stream_event_ack(req.seq, status)
+
+
+def read_chat_stream(
+    db: Session, user_id: int, request_id: str, after: int,
+) -> ChatStreamReadOut:
+    """读取快照与 after 之后的事件；不存在、他人的或已过期一律 404。"""
+    now = _chat_stream_now()
+    repository.delete_expired_chat_streams(db, user_id, now)
+    current = repository.get_chat_stream(db, user_id, request_id)
+    if current is None:
+        db.commit()
+        raise domain.ChatStreamNotFoundError()
+    events = repository.list_chat_stream_events(db, user_id, request_id, after)
+    db.commit()
+    return ChatStreamReadOut(**current.model_dump(), events=events)
+
+
+def cancel_chat_stream(
+    db: Session, user_id: int, request_id: str,
+) -> ChatStreamOut:
+    """仅 owner 可置取消标记；已终止的流保持终态，重复取消幂等。"""
+    now = _chat_stream_now()
+    repository.delete_expired_chat_streams(db, user_id, now)
+    current = repository.get_chat_stream(db, user_id, request_id, for_update=True)
+    if current is None:
+        db.rollback()
+        raise domain.ChatStreamNotFoundError()
+    if current.status in CHAT_STREAM_TERMINAL:
+        db.commit()
+        return current
+    repository.mark_chat_stream_cancelled_request(db, user_id, request_id)
+    db.commit()
+    updated = repository.get_chat_stream(db, user_id, request_id)
+    return updated if updated is not None else current
+
+
+# ---------- 沙箱执行审计（P0-4） ----------
+
+
+def record_sandbox_event(
+    db: Session, req: SandboxEventCreateRequest, trace_id: str,
+) -> SandboxEventOut:
+    """追加沙箱审计：系统级事件，不写用户归属；trace 缺省回落到请求头。"""
+    event = repository.insert_sandbox_event(db, req, req.trace_id or trace_id)
+    db.commit()
+    action_logger.info(
+        "sandbox_event_recorded outcome=%s tool=%s reason=%s trace_id=%s",
+        req.outcome, req.tool, req.reason_code or "-", req.trace_id or trace_id,
+    )
+    return event

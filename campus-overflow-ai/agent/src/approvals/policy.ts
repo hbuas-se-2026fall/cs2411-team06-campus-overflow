@@ -24,6 +24,7 @@ export const describeEffect = (input: GovernancePreviewInput): string => {
   const effects = {
     hide: "拟隐藏该内容，使其不再出现在普通用户的公开读取结果中",
     delete: "拟软删除该内容，保留治理审计记录",
+    edit: "拟要求作者修改该内容，修改后标记自动解除",
     ban: "拟永久封禁目标账号，最终受后端身份保护规则约束",
     ban_temp: `拟限时封禁目标账号 ${input.duration_days ?? 7} 天，最终受后端身份保护规则约束`,
     warn: "拟向目标用户发送警告并记录审计，不更改账号状态或内容",

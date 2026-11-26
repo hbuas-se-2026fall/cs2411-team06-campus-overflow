@@ -27,6 +27,7 @@ from app.modules.qa.schemas import (
     QuestionListItemResponse,
     QuestionResponse,
     RecentQuestionContent,
+    SyncQuestionItem,
     TagBrief,
     TagResponse,
     VoteTargetData,
@@ -58,6 +59,20 @@ def list_recent_question_contents(
             created_at=q.created_at,
         )
         for q in questions
+    ]
+
+
+def list_questions_for_sync(
+    db: Session, updated_after: datetime, cursor_id: int, limit: int,
+) -> list[SyncQuestionItem]:
+    """跨模块公开函数（D-5）：增量同步可见问题（T-17 N-05），只读、无正文与作者。"""
+    rows = repository.list_questions_for_sync(db, updated_after, cursor_id, limit)
+    return [
+        SyncQuestionItem(
+            id=row.id, title=row.title, course_id=row.course_id,
+            created_at=row.created_at, updated_at=row.updated_at,
+        )
+        for row in rows
     ]
 
 
@@ -706,6 +721,20 @@ def moderation_restore_deleted(
 ) -> None:
     """跨模块公开函数（D-5）：恢复软删内容（申诉复核撤销 delete，T-15-A）。"""
     repository.moderation_restore_deleted(db, target_type, target_id)
+
+
+def moderation_require_revision(
+    db: Session, target_type: str, target_id: int
+) -> None:
+    """跨模块公开函数（D-5）：要求作者修改（T-15-E），不改变可见性。"""
+    repository.moderation_set_needs_revision(db, target_type, target_id)
+
+
+def moderation_clear_revision(
+    db: Session, target_type: str, target_id: int
+) -> None:
+    """跨模块公开函数（D-5）：撤销要求修改（申诉复核，T-15-E）。"""
+    repository.moderation_clear_needs_revision(db, target_type, target_id)
 
 
 def list_patrol_contents(

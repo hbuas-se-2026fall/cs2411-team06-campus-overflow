@@ -19,6 +19,7 @@
     "smoke:ports": "node --import tsx scripts/smoke-ports.mjs",
     "smoke:mcp": "node --import tsx scripts/mcp-smoke.mjs",
     "rag:eval": "node --import tsx scripts/rag-eval.mjs",
+    "bench:plan-parallel": "node --import tsx scripts/bench-plan-parallel.mjs",
     "test": "vitest run",
     "lint": "eslint ."
   },

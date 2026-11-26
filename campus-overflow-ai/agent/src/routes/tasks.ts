@@ -3,6 +3,8 @@ import type { LanguageModel } from "ai";
 
 import { dispatchTask } from "../tasks/index.js";
 import { runReviewed } from "../loop/reviewed-run.js";
+import { createRunControlGateIfSupported, isRunControlEnabled } from "../loop/run-control-gate.js";
+import { RunStoppedError } from "../loop/abort.js";
 import { PersistentRunAudit } from "../observability/persistent-audit.js";
 import type { RunContext } from "../observability/run-context.js";
 import { PoolBusyError } from "../orchestrator/scheduler.js";
@@ -38,6 +40,8 @@ export const registerTaskRoutes = (app: AgentApp, deps: AppDependencies): void =
       return await pool.run(kind, jobId, async (lease) => {
         const control = c.get("runControl");
         control.start();
+        // 取消由控制门触发时只中止本次任务，不影响同请求的其他连接。
+        const runAbort = new AbortController();
         try {
           const outcome = await pool.runner.run({
             jobId,
@@ -48,7 +52,7 @@ export const registerTaskRoutes = (app: AgentApp, deps: AppDependencies): void =
             createClient: () => c.get("internalClient"),
             model,
             traceId: c.get("traceId"),
-            signal: AbortSignal.any([control.signal, lease.signal]),
+            signal: AbortSignal.any([control.signal, lease.signal, runAbort.signal]),
           }, lease, async ({ context, safePoint }): Promise<TaskOutcome> => {
             const audit = new PersistentRunAudit(context.client.audit, context.run, {
               actor_kind: context.actorKind,
@@ -59,10 +63,19 @@ export const registerTaskRoutes = (app: AgentApp, deps: AppDependencies): void =
               // 让位只允许发生在审计创建之前：重排后重新建运行记录，不会重复写入已完成动作。
               safePoint();
               await audit.create();
+              // 仅治理扫描支持人工控制（RC-R05）；开关关闭或客户端不支持时保持现状。
+              const runControl = typeParse.data === "moderation_scan" && isRunControlEnabled()
+                ? createRunControlGateIfSupported({
+                    client: context.client, agentRunId: context.run.agentRunId, traceId: context.run.traceId,
+                    signal: context.run.signal,
+                    onCancel: () => runAbort.abort(new RunStoppedError("cancelled")),
+                    recordEvent: (type) => audit.controlEvent(type),
+                  })
+                : undefined;
               const data = await runReviewed({ kind: typeParse.data, input: rawBody, model, run: context.run,
                 produce: (feedback) => dispatchTask(typeParse.data, rawBody, {
                   runContext: context.run, model, internalClient: context.client,
-                  toolRegistry: context.tools, audit, feedback,
+                  toolRegistry: context.tools, audit, feedback, runControl,
                 }) });
               await audit.finish("succeeded");
               return { data };

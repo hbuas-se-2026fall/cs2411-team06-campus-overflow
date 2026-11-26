@@ -4,15 +4,19 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import desc, func, or_, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.governance import domain
 from app.modules.governance.models import (
+    AgentChatStream,
+    AgentChatStreamEvent,
     AgentExperience,
-    AgentMemory,
     AgentRun,
     AgentRunEvent,
+    AgentSandboxEvent,
+    AgentSlotLease,
+    AgentSlotWaiter,
     AnonymousLearningEvent,
     Appeal,
     ApprovalWait,
@@ -20,21 +24,31 @@ from app.modules.governance.models import (
     CourseTagSource,
     GovernanceApprovalRequest,
     GovernanceExecutionJob,
+    McpCallLog,
     ModerationCase,
+    ModerationMark,
     PatrolNote,
     PatrolScanJob,
     PatrolWorkflowScan,
     PatrolWorkflowTask,
+    SystemSetting,
     ToolCallLog,
 )
 from app.modules.governance.schemas import (
     AgentRunOut,
     AppealOut,
     ApprovalWaitOut,
-    MemoryItemOut,
+    ChatStreamEventAck,
+    ChatStreamEventItem,
+    ChatStreamOut,
+    McpCallOut,
     ModerationCaseOut,
+    PatrolMarkOut,
     PatrolNoteOut,
     RunEventOut,
+    SandboxEventCreateRequest,
+    SandboxEventOut,
+    SystemSettingOut,
     ToolCallOut,
 )
 from app.modules.governance.schemas_executions import GovernanceApprovalRecord, GovernanceJobRecord
@@ -443,46 +457,6 @@ def create_tool_call(
     db.add(log)
     db.flush()
     return ToolCallOut.model_validate(log)
-
-
-# ---------- 持久化记忆（agent_memory） ----------
-
-
-def list_memories(
-    db: Session, user_id: int, course_id: int | None, memory_types: list[str] | None
-) -> list[MemoryItemOut]:
-    """读取用户生效记忆（is_enabled=true），按类型/课程可选过滤，最近优先。"""
-    query = db.query(AgentMemory).filter(
-        AgentMemory.user_id == user_id, AgentMemory.is_enabled.is_(True)
-    )
-    if course_id is not None:
-        query = query.filter(AgentMemory.course_id == course_id)
-    if memory_types:
-        query = query.filter(AgentMemory.memory_type.in_(memory_types))
-    rows = (
-        query.order_by(desc(AgentMemory.created_at), desc(AgentMemory.id))
-        .limit(domain.MEMORY_LIST_LIMIT)
-        .all()
-    )
-    return [MemoryItemOut.model_validate(row) for row in rows]
-
-
-def create_memory(
-    db: Session, user_id: int, memory_type: str, content: str,
-    course_id: int | None, source_run_id: str | None,
-) -> MemoryItemOut:
-    """写入一条记忆（敏感信息过滤在 service 层，本层只落库）。"""
-    item = AgentMemory(
-        user_id=user_id,
-        memory_type=memory_type,
-        content=content,
-        course_id=course_id,
-        source_run_id=source_run_id,
-        is_enabled=True,
-    )
-    db.add(item)
-    db.flush()
-    return MemoryItemOut.model_validate(item)
 
 
 # ---------- 审批工单（moderation_cases，C-06：只建工单不执行） ----------
@@ -912,3 +886,473 @@ def list_injectable_patrol_notes(
 
 def get_patrol_note_row(db: Session, note_id: int) -> PatrolNote | None:
     return db.get(PatrolNote, note_id)
+
+
+def find_claimable_slot(
+    db: Session, kind: str, capacity: int, job_id: str, now: datetime,
+) -> int | None:
+    """找同 kind 下可接管的槽位。
+
+    规则（P0-6）：
+    - 过期且属于其他 job：新任务接管，重试预算重置；
+    - 属于同一 job：顶替/重试均可，但预算必须大于 0（每次 -1）。
+    未过期的其他 job 槽位不可接管，否则全局容量会被绕过。
+    """
+    return db.scalar(
+        select(AgentSlotLease.slot_no)
+        .where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no <= capacity,
+            or_(
+                and_(
+                    AgentSlotLease.lease_expires_at <= now,
+                    AgentSlotLease.job_id != job_id,
+                ),
+                and_(
+                    AgentSlotLease.job_id == job_id,
+                    AgentSlotLease.retry_count > 0,
+                ),
+            ),
+        )
+        .order_by(AgentSlotLease.slot_no)
+        .limit(1)
+    )
+
+
+def claim_slot_row(
+    db: Session, kind: str, slot_no: int, *,
+    owner_instance: str, job_id: str, fencing_token: str,
+    expires_at: datetime, now: datetime,
+) -> bool:
+    """条件更新接管槽位；并发下另一个实例先改则返回 False。
+
+    同一 job 接管时重试预算 -1，其他 job 接管过期槽位时重置为初始预算。
+    """
+    same_job = AgentSlotLease.job_id == job_id
+    result = db.execute(
+        update(AgentSlotLease)
+        .where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no == slot_no,
+            or_(
+                and_(
+                    AgentSlotLease.lease_expires_at <= now,
+                    AgentSlotLease.job_id != job_id,
+                ),
+                and_(same_job, AgentSlotLease.retry_count > 0),
+            ),
+        )
+        .values(
+            owner_instance=owner_instance, job_id=job_id,
+            fencing_token=fencing_token, lease_expires_at=expires_at,
+            retry_count=case(
+                (same_job, AgentSlotLease.retry_count - 1),
+                else_=domain.SLOT_RETRY_BUDGET,
+            ),
+        )
+    )
+    return result.rowcount == 1
+
+
+def has_exhausted_job_lease(db: Session, kind: str, job_id: str) -> bool:
+    """该 job 的重试预算是否已用尽；用尽后不得新开槽位绕过上限。"""
+    return int(db.scalar(
+        select(func.count()).select_from(AgentSlotLease).where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.job_id == job_id,
+            AgentSlotLease.retry_count <= 0,
+        )
+    ) or 0) > 0
+
+
+def count_kind_slots(db: Session, kind: str, capacity: int) -> int:
+    """只统计当前容量内的槽位；容量下调后超出编号的旧行不占新配额。"""
+    return int(db.scalar(
+        select(func.count()).select_from(AgentSlotLease).where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no <= capacity,
+        )
+    ) or 0)
+
+
+def next_free_slot_no(db: Session, kind: str, capacity: int) -> int | None:
+    """取容量内最小空闲编号，释放后立即复用，避免编号空洞导致容量失真。"""
+    used = set(db.scalars(
+        select(AgentSlotLease.slot_no).where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no <= capacity,
+        )
+    ).all())
+    for slot_no in range(1, capacity + 1):
+        if slot_no not in used:
+            return slot_no
+    return None
+
+
+def insert_slot_lease(
+    db: Session, *, kind: str, slot_no: int, owner_instance: str, job_id: str,
+    fencing_token: str, expires_at: datetime,
+) -> None:
+    db.add(AgentSlotLease(
+        kind=kind, slot_no=slot_no, owner_instance=owner_instance,
+        job_id=job_id, fencing_token=fencing_token, lease_expires_at=expires_at,
+        retry_count=domain.SLOT_RETRY_BUDGET,
+    ))
+    db.flush()
+
+
+def renew_slot_lease(
+    db: Session, kind: str, slot_no: int, fencing_token: str,
+    expires_at: datetime, now: datetime,
+) -> bool:
+    """仅未过期且 token 匹配时可续租；过期租约可能已被他人抢占。"""
+    result = db.execute(
+        update(AgentSlotLease)
+        .where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no == slot_no,
+            AgentSlotLease.fencing_token == fencing_token,
+            AgentSlotLease.lease_expires_at > now,
+        )
+        .values(lease_expires_at=expires_at)
+    )
+    return result.rowcount == 1
+
+
+def delete_slot_lease(
+    db: Session, kind: str, slot_no: int, fencing_token: str,
+) -> bool:
+    result = db.execute(
+        delete(AgentSlotLease).where(
+            AgentSlotLease.kind == kind,
+            AgentSlotLease.slot_no == slot_no,
+            AgentSlotLease.fencing_token == fencing_token,
+        )
+    )
+    return result.rowcount == 1
+
+
+# ---------- 全局问答排队（P0-5） ----------
+
+
+def insert_slot_waiter(
+    db: Session, *, kind: str, job_id: str, instance_id: str, capacity: int,
+    ttl_seconds: int, enqueued_at: datetime, expires_at: datetime,
+) -> AgentSlotWaiter:
+    waiter = AgentSlotWaiter(
+        kind=kind, job_id=job_id, instance_id=instance_id, capacity=capacity,
+        ttl_seconds=ttl_seconds, status="waiting",
+        enqueued_at=enqueued_at, expires_at=expires_at,
+    )
+    db.add(waiter)
+    db.flush()
+    return waiter
+
+
+def get_slot_waiter(
+    db: Session, ticket_id: int, for_update: bool = False,
+) -> AgentSlotWaiter | None:
+    query = db.query(AgentSlotWaiter).filter(AgentSlotWaiter.id == ticket_id)
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    return query.first()
+
+
+def find_waiting_head(
+    db: Session, kind: str, for_update: bool = False,
+) -> AgentSlotWaiter | None:
+    """队首：同 kind 中最早入队且仍在等待的票据（严格 FIFO）。"""
+    query = db.query(AgentSlotWaiter).filter(
+        AgentSlotWaiter.kind == kind, AgentSlotWaiter.status == "waiting",
+    ).order_by(AgentSlotWaiter.id)
+    if for_update:
+        query = query.with_for_update()
+    return query.first()
+
+
+def grant_slot_waiter(
+    db: Session, waiter: AgentSlotWaiter, *, slot_no: int, fencing_token: str,
+    now: datetime,
+) -> None:
+    waiter.status = "granted"
+    waiter.slot_no = slot_no
+    waiter.fencing_token = fencing_token
+    waiter.granted_at = now
+    db.flush()
+
+
+def count_waiting_position(db: Session, kind: str, ticket_id: int) -> int:
+    """FIFO 位置：同 kind 中 id 不大于本票据的等待者数量（含自己）。"""
+    return int(db.scalar(
+        select(func.count()).select_from(AgentSlotWaiter).where(
+            AgentSlotWaiter.kind == kind,
+            AgentSlotWaiter.status == "waiting",
+            AgentSlotWaiter.id <= ticket_id,
+        )
+    ) or 0)
+
+
+def delete_slot_waiter(db: Session, waiter: AgentSlotWaiter) -> None:
+    db.delete(waiter)
+    db.flush()
+
+
+# ---------- 聊天可恢复流（P0-3） ----------
+
+
+def delete_expired_chat_streams(db: Session, user_id: int, now: datetime) -> None:
+    """机会式清理该用户已过期流及其事件；过期数据不再对外可见。"""
+    ids = [
+        row.id
+        for row in db.query(AgentChatStream.id).filter(
+            AgentChatStream.user_id == user_id,
+            AgentChatStream.expires_at <= now,
+        ).all()
+    ]
+    if not ids:
+        return
+    db.query(AgentChatStreamEvent).filter(
+        AgentChatStreamEvent.stream_id.in_(ids)
+    ).delete(synchronize_session=False)
+    db.query(AgentChatStream).filter(AgentChatStream.id.in_(ids)).delete(
+        synchronize_session=False
+    )
+    db.flush()
+
+
+def get_chat_stream(
+    db: Session, user_id: int, request_id: str, *, for_update: bool = False,
+) -> ChatStreamOut | None:
+    query = db.query(AgentChatStream).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    )
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    row = query.first()
+    if row is None:
+        return None
+    return ChatStreamOut.model_validate(row)
+
+
+def create_chat_stream(
+    db: Session, user_id: int, request_id: str, agent_run_id: str | None,
+    trace_id: str | None, expires_at: datetime,
+) -> ChatStreamOut:
+    row = AgentChatStream(
+        user_id=user_id, request_id=request_id, agent_run_id=agent_run_id,
+        trace_id=trace_id, status="running", cancel_requested=False,
+        expires_at=expires_at,
+    )
+    db.add(row)
+    db.flush()
+    return ChatStreamOut.model_validate(row)
+
+
+def list_chat_stream_events(
+    db: Session, user_id: int, request_id: str, after: int,
+) -> list[ChatStreamEventItem]:
+    stream_id = db.query(AgentChatStream.id).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).scalar()
+    if stream_id is None:
+        return []
+    rows = db.query(AgentChatStreamEvent).filter(
+        AgentChatStreamEvent.stream_id == stream_id,
+        AgentChatStreamEvent.seq > after,
+    ).order_by(AgentChatStreamEvent.seq).all()
+    return [
+        ChatStreamEventItem(seq=row.seq, event_type=row.event_type, data=row.payload)
+        for row in rows
+    ]
+
+
+def get_chat_stream_event(
+    db: Session, user_id: int, request_id: str, seq: int,
+) -> ChatStreamEventItem | None:
+    stream_id = db.query(AgentChatStream.id).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).scalar()
+    if stream_id is None:
+        return None
+    row = db.query(AgentChatStreamEvent).filter(
+        AgentChatStreamEvent.stream_id == stream_id,
+        AgentChatStreamEvent.seq == seq,
+    ).first()
+    if row is None:
+        return None
+    return ChatStreamEventItem(seq=row.seq, event_type=row.event_type, data=row.payload)
+
+
+def create_chat_stream_event(
+    db: Session, user_id: int, request_id: str, seq: int, event_type: str, data: str,
+) -> ChatStreamEventItem | None:
+    stream_id = db.query(AgentChatStream.id).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).scalar()
+    if stream_id is None:
+        return None
+    row = AgentChatStreamEvent(
+        stream_id=stream_id, seq=seq, event_type=event_type, payload=data,
+    )
+    db.add(row)
+    db.flush()
+    return ChatStreamEventItem(
+        seq=seq, event_type=event_type, data=data,
+    )
+
+
+def update_chat_stream_status(
+    db: Session, user_id: int, request_id: str, status: str,
+) -> None:
+    db.query(AgentChatStream).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).update({"status": status}, synchronize_session=False)
+    db.flush()
+
+
+def mark_chat_stream_cancelled_request(
+    db: Session, user_id: int, request_id: str,
+) -> None:
+    db.query(AgentChatStream).filter(
+        AgentChatStream.user_id == user_id,
+        AgentChatStream.request_id == request_id,
+    ).update({"cancel_requested": True}, synchronize_session=False)
+    db.flush()
+
+
+def chat_stream_event_ack(seq: int, status: str, duplicate: bool = False) -> ChatStreamEventAck:
+    return ChatStreamEventAck(seq=seq, status=status, duplicate=duplicate)
+
+
+# ---------- 沙箱执行审计（P0-4） ----------
+
+
+def insert_sandbox_event(
+    db: Session, req: SandboxEventCreateRequest, trace_id: str,
+) -> SandboxEventOut:
+    """追加一条沙箱审计；事件只增不改，trace 缺省用服务端透传值。"""
+    row = AgentSandboxEvent(
+        event=req.event, outcome=req.outcome, tool=req.tool,
+        executable=req.executable, command_digest=req.command_digest,
+        arg_count=req.arg_count, action_class=req.action_class,
+        network_mode=req.network_mode, trace_id=trace_id,
+        duration_ms=req.duration_ms, output_bytes=req.output_bytes,
+        reason_code=req.reason_code,
+    )
+    db.add(row)
+    db.flush()
+    return SandboxEventOut.model_validate(row)
+
+
+# ---------- 低风险内容打标（T-15-F / US-13） ----------
+
+
+def upsert_moderation_mark(
+    db: Session, target_type: str, target_id: int, risk_level: str,
+    reason: str, agent_run_id: str, trace_id: str,
+) -> PatrolMarkOut:
+    """按目标唯一写入/覆盖低风险标记；只 flush，提交由 service 负责。"""
+    row = (
+        db.query(ModerationMark)
+        .filter(
+            ModerationMark.target_type == target_type,
+            ModerationMark.target_id == target_id,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        row = ModerationMark(
+            target_type=target_type, target_id=target_id,
+            agent_run_id=agent_run_id, trace_id=trace_id,
+        )
+        db.add(row)
+    row.risk_level = risk_level
+    row.reason = reason
+    row.agent_run_id = agent_run_id
+    row.trace_id = trace_id
+    db.flush()
+    db.refresh(row)
+    return PatrolMarkOut.model_validate(row)
+
+
+def list_moderation_marks(db: Session, limit: int = 100) -> list[PatrolMarkOut]:
+    """最近低风险打标（管理员只读）；仅元数据，不含正文。"""
+    rows = (
+        db.query(ModerationMark)
+        .order_by(ModerationMark.updated_at.desc(), ModerationMark.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [PatrolMarkOut.model_validate(row) for row in rows]
+
+
+# ---------- MCP 调用审计（T-17 N-04 / US-18） ----------
+
+
+def insert_mcp_call(
+    db: Session, *, client_name: str, tool_name: str, status: str,
+    args_summary: str, result_summary: str | None, error_summary: str | None,
+    duration_ms: int, trace_id: str,
+) -> McpCallOut:
+    """追加 MCP 调用审计；只 flush，提交由 service 负责。"""
+    row = McpCallLog(
+        client_name=client_name, tool_name=tool_name, status=status,
+        args_summary=args_summary, result_summary=result_summary,
+        error_summary=error_summary, duration_ms=duration_ms, trace_id=trace_id,
+    )
+    db.add(row)
+    db.flush()
+    db.refresh(row)
+    return McpCallOut.model_validate(row)
+
+
+def list_mcp_calls(
+    db: Session, page: int = 1, page_size: int = 20,
+    client_name: str | None = None, tool_name: str | None = None,
+    status: str | None = None,
+) -> tuple[list[McpCallOut], int]:
+    """管理员分页检索 MCP 调用审计，可按客户端/工具/状态筛选。"""
+    query = db.query(McpCallLog)
+    if client_name:
+        query = query.filter(McpCallLog.client_name == client_name)
+    if tool_name:
+        query = query.filter(McpCallLog.tool_name == tool_name)
+    if status:
+        query = query.filter(McpCallLog.status == status)
+    total = query.count()
+    rows = (
+        query.order_by(McpCallLog.created_at.desc(), McpCallLog.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return [McpCallOut.model_validate(row) for row in rows], total
+
+
+# ---------- 系统运行开关（SA-07C / ADR-010） ----------
+
+
+def get_system_setting(db: Session, key: str) -> SystemSettingOut | None:
+    """按 key 读取设置；不存在表示使用代码默认值。"""
+    row = db.get(SystemSetting, key)
+    return SystemSettingOut.model_validate(row) if row is not None else None
+
+
+def save_system_setting(
+    db: Session, key: str, value: str, actor_id: int | None,
+) -> SystemSettingOut:
+    """写入或覆盖设置；本层只 flush，提交由 service 负责。"""
+    row = db.get(SystemSetting, key)
+    if row is None:
+        row = SystemSetting(key=key, value=value, updated_by=actor_id)
+        db.add(row)
+    else:
+        row.value, row.updated_by = value, actor_id
+    db.flush()
+    db.refresh(row)
+    return SystemSettingOut.model_validate(row)

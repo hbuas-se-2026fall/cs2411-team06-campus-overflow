@@ -155,6 +155,7 @@ describe("moderation_scan handler", () => {
       fetchModerationTarget: vi.fn().mockResolvedValue({
         targetType: "answer", targetId: 12, authorId: 3, courseId: 2, body: "待评估原文",
       }),
+      createPatrolCase: vi.fn().mockResolvedValue({ repeat: false }),
     };
     const model = modelWithText(
       JSON.stringify({ steps: [{ stepId: "s1", objective: "读取待评估正文", toolName: "fetchModerationTarget",
@@ -173,6 +174,35 @@ describe("moderation_scan handler", () => {
     expect(clientSpy.searchCourses).not.toHaveBeenCalled();
     expect(clientSpy.searchQuestions).not.toHaveBeenCalled();
     expect(clientSpy.fetchTags).not.toHaveBeenCalled();
+    // C-06：升级判定只创建待确认工单，快照用已核验正文。
+    expect(clientSpy.createPatrolCase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target_type: "answer", target_id: 12, risk_level: "high",
+        reason: "疑似辱骂内容", snapshot: "待评估原文", agent_run_id: expect.any(String),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("不升级时不创建工单", async () => {
+    const clientSpy: InternalClient = {
+      searchCourses: vi.fn(), searchQuestions: vi.fn(), fetchTags: vi.fn(),
+      fetchModerationTarget: vi.fn().mockResolvedValue({
+        targetType: "answer", targetId: 13, authorId: 3, courseId: 2, body: "正常回答",
+      }),
+      createPatrolCase: vi.fn(),
+    };
+    const model = modelWithText(
+      JSON.stringify({ steps: [{ stepId: "s1", objective: "读取待评估正文", toolName: "fetchModerationTarget",
+        args: { targetType: "$input.targetType", targetId: "$input.targetId" } }] }),
+      JSON.stringify({ riskLevel: "low", shouldEscalate: false, reason: "内容正常" }),
+    );
+    await dispatchTask(
+      "moderation_scan",
+      { targetType: "answer", targetId: 13, contentExcerpt: "正常回答" },
+      buildContext(model, clientSpy),
+    );
+    expect(clientSpy.createPatrolCase).not.toHaveBeenCalled();
   });
 });
 

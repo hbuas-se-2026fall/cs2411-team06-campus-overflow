@@ -56,7 +56,7 @@ describe("MCP 服务端：白名单与工具列表", () => {
     const { client } = await connectServer();
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort())
-      .toEqual(["list_tags", "search_courses", "search_questions"]);
+      .toEqual(["list_tags", "search_courses", "search_questions", "sync_questions"]);
   });
 
   it("未注册工具不可被调用：isError 结果且不暴露注册表内容", async () => {

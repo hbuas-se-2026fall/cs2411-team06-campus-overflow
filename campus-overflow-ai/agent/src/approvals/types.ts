@@ -26,15 +26,18 @@ export type GovernanceState = z.infer<typeof GovernanceStateSchema>;
 const GovernanceInputFields = z.object({
   target_type: z.enum(["question", "answer", "comment", "user"]),
   target_id: z.number().int().positive(),
-  action: z.enum(["hide", "delete", "ban", "ban_temp", "warn"]),
+  action: z.enum(["hide", "delete", "edit", "ban", "ban_temp", "warn"]),
   reason: z.string().trim().min(1).max(500),
   duration_days: z.number().int().min(1).max(30).optional(),
 }).strict();
 
 const checkAction = (input: z.infer<typeof GovernanceInputFields>, context: z.RefinementCtx) => {
-  const isContentAction = input.action === "hide" || input.action === "delete";
+  const isContentAction = input.action === "hide" || input.action === "delete" || input.action === "edit";
   if (isContentAction === (input.target_type === "user")) {
     context.addIssue({ code: "custom", message: "动作与目标类型不匹配" });
+  }
+  if (input.action === "edit" && input.target_type === "comment") {
+    context.addIssue({ code: "custom", message: "评论不支持要求修改" });
   }
   if (input.action !== "ban_temp" && input.duration_days !== undefined) {
     context.addIssue({ code: "custom", message: "只有限时封禁可以指定期限" });
@@ -52,7 +55,7 @@ export type GovernanceRequestInput = z.infer<typeof GovernanceRequestInputSchema
 export const GovernanceRequestAckSchema = z.object({
   request_id: z.uuid(), case_id: z.number().int().positive(), agent_run_id: z.string().min(1).max(64),
   target_type: z.enum(["question", "answer", "comment", "user"]), target_id: z.number().int().positive(),
-  action: z.enum(["hide", "delete", "ban", "ban_temp", "warn"]),
+  action: z.enum(["hide", "delete", "edit", "ban", "ban_temp", "warn"]),
   duration_days: z.number().int().min(1).max(30).nullable().optional(),
   status: z.enum(["pending", "agent_proposed", "manager_directed", "approved", "executed", "rejected", "cancelled", "expired", "invalidated", "blocked"]),
   contract_version: z.literal(2).optional(),

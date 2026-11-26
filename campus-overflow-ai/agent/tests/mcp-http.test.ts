@@ -80,7 +80,7 @@ describe("MCP HTTP 传输（T-17 N-02）", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort())
-      .toEqual(["list_tags", "search_courses", "search_questions"]);
+      .toEqual(["list_tags", "search_courses", "search_questions", "sync_questions"]);
 
     const result = await client.callTool({
       name: "search_questions", arguments: { keyword: "死锁", limit: 5 },

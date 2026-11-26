@@ -40,6 +40,11 @@ function fixtureClient() {
     },
     fetchPatrolContents: vi.fn().mockResolvedValue(CONTENTS),
     createPatrolCase: vi.fn().mockResolvedValue({ repeat: false }),
+    createPatrolMark: vi.fn().mockResolvedValue({
+      id: 1, target_type: "question", target_id: 1, risk_level: "low",
+      reason: "", agent_run_id: "x", trace_id: "t",
+      created_at: "2026-01-01T00:00:00", updated_at: "2026-01-01T00:00:00",
+    }),
     fetchKnowledgeTreeCourses: vi.fn(), fetchKnowledgeTree: vi.fn(),
     fetchRecentQuestions: vi.fn(), saveWeeklyReport: vi.fn(),
     searchCourses: vi.fn(), searchQuestions: vi.fn(), fetchTags: vi.fn(),
@@ -83,7 +88,7 @@ describe("静默巡检调度器", () => {
     expect(scanPrompt).toContain("问题正文一");
   });
 
-  it("低风险或不建议复核仅跳过，不建单", async () => {
+  it("低风险写内容级打标，不建议复核不建单", async () => {
     const client = fixtureClient();
     const generate = vi.fn().mockResolvedValue(generated(verdict()));
     const outcomes = await runModerationPatrol({
@@ -92,6 +97,10 @@ describe("静默巡检调度器", () => {
     });
     expect(outcomes).toEqual({ scanned: 3, escalated: 0, skipped: 3, failed: 0 });
     expect(client.createPatrolCase).not.toHaveBeenCalled();
+    expect(client.createPatrolMark).toHaveBeenCalledTimes(3);
+    expect(client.createPatrolMark.mock.calls[0][0]).toMatchObject({
+      target_type: "question", target_id: 1, risk_level: "low", reason: "内容无风险",
+    });
   });
 
   it("同目标已有未结案工单（repeat=true）计为升级但幂等", async () => {

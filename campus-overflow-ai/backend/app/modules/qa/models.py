@@ -51,6 +51,10 @@ class Question(Base):
     is_hidden: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # 要求修改（T-15-E）：置位后作者编辑内容即自动清除，不隐藏内容
+    needs_revision: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
@@ -92,6 +96,10 @@ class Answer(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 治理临时隐藏（US-14）：同 Question.is_hidden
     is_hidden: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    # 要求修改（T-15-E）：同 Question.needs_revision
+    needs_revision: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
     created_at: Mapped[datetime] = mapped_column(

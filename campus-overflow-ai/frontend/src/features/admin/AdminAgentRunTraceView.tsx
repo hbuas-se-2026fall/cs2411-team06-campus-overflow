@@ -13,6 +13,7 @@ import {
 } from "@/shared/components";
 import { useAsyncData } from "@/shared/hooks/useAsyncData";
 
+import { AdminRunControlPanel } from "./AdminRunControlPanel";
 import {
   AGENT_EVENT_LABELS,
   AGENT_STATUS_LABELS,
@@ -64,6 +65,13 @@ export function AdminAgentRunTraceView({ agentRunId }: { agentRunId: string }) {
           <p className="text-[13px] text-ink-muted">结果摘要：{run.output_summary}</p>
         ) : null}
       </Card>
+
+      {/* 运行中人工控制（T-21E）：仅治理扫描与管理员聊天可操作，其他任务只读提示 */}
+      <AdminRunControlPanel
+        agentRunId={run.agent_run_id}
+        taskType={run.task_type}
+        isRunActive={run.status === "running"}
+      />
 
       <Card className="flex flex-col gap-2 p-5">
         <h3 className="text-[15px] font-semibold text-ink">计划与步骤</h3>

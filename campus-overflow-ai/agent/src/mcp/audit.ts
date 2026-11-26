@@ -1,7 +1,9 @@
 // MCP 调用审计（T-17 N-01，US-18 / AG-R03）：记录客户端、工具、参数与结果
 // 摘要、状态、耗时、trace——只存受控脱敏摘要，不存完整原文与凭证（C-07/C-08）。
-// 本批为结构化日志；持久化存储需要归属模型，登记后续批次。
+// N-04：持久化实现把同结构摘要写入后端 mcp_call_logs；写入失败只记日志，不影响调用结果。
 import { buildSummary } from "../observability/sensitive.js";
+import type { McpCallAuditBody } from "../internal-client.js";
+import { asTraceId } from "../types/index.js";
 
 export interface McpCallAuditRecord {
   event: "mcp_tool_call";
@@ -38,6 +40,39 @@ export const consoleMcpCallAudit = (): McpCallAudit => ({
     console.error(JSON.stringify(record));
   },
 });
+
+export interface McpCallPersister {
+  recordMcpCall(body: McpCallAuditBody, traceId: ReturnType<typeof asTraceId>): Promise<unknown>;
+}
+
+/**
+ * 持久化审计（T-17 N-04）：异步写入后端，失败只记录事件名，绝不阻塞或改变 MCP 调用结果。
+ * 传入客户端必须是服务级 InternalClient（只带服务 token，不携带用户身份）。
+ */
+export const createPersistedMcpCallAudit = (client: McpCallPersister): McpCallAudit => {
+  const write = (body: McpCallAuditBody): void => {
+    void client.recordMcpCall(body, asTraceId(body.trace_id)).catch(() => {
+      console.error(JSON.stringify({ event: "mcp_audit_persist_failed", tool: body.tool_name }));
+    });
+  };
+  return {
+    record: (record) => {
+      write({
+        client_name: record.client, tool_name: record.tool, status: record.status,
+        args_summary: record.args_summary, result_summary: record.result_summary,
+        error_summary: record.error_summary, duration_ms: record.duration_ms,
+        trace_id: record.trace_id,
+      });
+    },
+    recordRejected: (record) => {
+      write({
+        client_name: record.client, tool_name: "*", status: "rejected",
+        args_summary: "", error_summary: record.reason, duration_ms: 0,
+        trace_id: record.trace_id,
+      });
+    },
+  };
+};
 
 export const summarizeArgs = (args: unknown): string =>
   buildSummary(JSON.stringify(args ?? {}), 200);

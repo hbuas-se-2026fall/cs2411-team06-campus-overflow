@@ -9,6 +9,8 @@ import {
   addMemoryEntry,
   removeMemoryEntry,
   listMemoryEntries,
+  isMemoryAutoUpdateEnabled,
+  setMemoryAutoUpdateEnabled,
 } from "@/shared/lib/browser-memory";
 import { Button, ConfirmDialog } from "@/shared/components";
 import { useSessionStore } from "@/shared/stores/session-store";
@@ -26,8 +28,14 @@ function BrowserMemoryPanel() {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [autoUpdate, setAutoUpdate] = useState<boolean | null>(null);
 
   const userId = me?.id;
+  // 自动更新开关按账号读取；切换账号后同步显示该账号设置
+  const autoLoadedFor = autoUpdate === null ? null : userId;
+  if (userId !== undefined && autoLoadedFor !== userId) {
+    setAutoUpdate(isMemoryAutoUpdateEnabled(userId));
+  }
   // 首次渲染按当前账号加载命名空间；账号切换（me.id 变化）重新加载
   const loadedFor = entries === null ? null : userId;
   if (userId !== undefined && loadedFor !== userId) {
@@ -75,6 +83,18 @@ function BrowserMemoryPanel() {
       <p className="mt-1 text-[12px] text-ink-subtle">
         仅保存在本浏览器中、按账号隔离，AI 对话时作为偏好参考；不云同步，他人不可见。
       </p>
+      <label className="mt-2 flex items-center gap-2 text-[13px] text-ink">
+        <input
+          type="checkbox"
+          checked={autoUpdate ?? false}
+          onChange={(event) => {
+            if (userId === undefined) return;
+            setMemoryAutoUpdateEnabled(userId, event.target.checked);
+            setAutoUpdate(event.target.checked);
+          }}
+        />
+        AI 自动更新记忆（回答后只保存非敏感的长期偏好，可随时关闭）
+      </label>
 
       {entries !== null && entries.length > 0 ? (
         <ul className="mt-3 flex flex-col gap-1.5">

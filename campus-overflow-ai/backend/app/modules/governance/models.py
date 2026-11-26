@@ -18,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.modules.governance.domain import SLOT_RETRY_BUDGET
 
 
 class ModerationCase(Base):
@@ -202,35 +203,6 @@ class ToolCallLog(Base):
     trace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
-    )
-
-
-class AgentMemory(Base):
-    """Agent 持久化记忆（US-17/C-07）：用户偏好 / 课程上下文 / 任务经验三类。
-
-    写入前经 service 敏感信息过滤（X-06）；用户可禁用（is_enabled）或删除
-    影响自己的记忆（管理接口随 T-14）。course_id 为软引用（不设 FK，
-    同 ModerationCase.target_id 的跨模块快照语义）。
-    """
-
-    __tablename__ = "agent_memory"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id"), nullable=False, index=True
-    )
-    # 类型：preference / course_context / task_experience（plan §4 三类）
-    memory_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    # 课程上下文可选（plan §6 存储键 user_id + memory_type + course_id? + source_run_id）
-    course_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    source_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 
@@ -440,6 +412,334 @@ class PatrolNote(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
     trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
     agent_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class AgentChatStream(Base):
+    """聊天可恢复流（P0-3）：按用户 + 请求 id 幂等登记，30 分钟过期。
+
+    只保存运行状态与事件游标，不保存凭证；内容事件由子表按序追加。
+    cancel_requested 供跨实例运行轮询，运行本身仍由 Agent 实例持有。
+    """
+
+    __tablename__ = "agent_chat_streams"
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_chat_stream_user_request"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    agent_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # running / succeeded / failed / cancelled
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="running", index=True
+    )
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class AgentChatStreamEvent(Base):
+    """聊天事件追加表：payload 存原始 SSE data JSON，按 (stream_id, seq) 唯一。"""
+
+    __tablename__ = "agent_chat_stream_events"
+    __table_args__ = (
+        UniqueConstraint("stream_id", "seq", name="uq_chat_stream_event_seq"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stream_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_chat_streams.id"), nullable=False, index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    # meta / delta / notice / done / error
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class AgentSandboxEvent(Base):
+    """沙箱执行审计（P0-4）：系统级事件，不归属具体用户。
+
+    只保存命令摘要、参数个数、耗时与输出字节，不落参数正文、URL、
+    stderr 或凭据（C-07/C-08）；denied/failed 必须带固定原因码。
+    """
+
+    __tablename__ = "agent_sandbox_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event: Mapped[str] = mapped_column(String(30), nullable=False, default="sandbox_exec")
+    # denied / completed / failed
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    tool: Mapped[str] = mapped_column(String(50), nullable=False)
+    # 只记录可执行文件名，不记录绝对路径
+    executable: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 16 位 sha256 前缀，不可逆还原参数
+    command_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    arg_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    action_class: Mapped[str] = mapped_column(String(16), nullable=False)
+    network_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # 审计保留策略由运维控制；本批不做自动删除，避免静默丢失证据
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False, index=True
+    )
+
+
+class AgentSlotLease(Base):
+    """跨实例槽位租约（P0-1）：同类任务全局容量由调用方 capacity 控制。
+
+    槽位按 kind 各自编号；释放即删除，过期行在下次 claim 时被原子复用。
+    fencing_token 由后端生成，续租与释放必须匹配，防止旧 worker 在租约
+    失效或被他实例抢占后继续写入。
+    """
+
+    __tablename__ = "agent_slot_leases"
+
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    slot_no: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_instance: Mapped[str] = mapped_column(String(64), nullable=False)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fencing_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, index=True
+    )
+    # 同一 job 的重试预算：顶替/重试各 -1，归零后不可再占用该槽位
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=SLOT_RETRY_BUDGET,
+        server_default=str(SLOT_RETRY_BUDGET),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AgentSlotWaiter(Base):
+    """全局问答排队票据（P0-5）：超限任务按入队顺序等待，而不是立即繁忙。
+
+    票据只保存排队与授予状态，真正并发仍由 agent_slot_leases 控制。
+    授予后由 Agent 轮询取走租约并删除票据，同一票据不可重复使用；
+    等待到期由 expires_at 判定，过期的队首直接作废，不阻塞后续排队。
+    """
+
+    __tablename__ = "agent_slot_waiters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    instance_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    capacity: Mapped[int] = mapped_column(Integer, nullable=False)
+    ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    # waiting / granted
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="waiting")
+    slot_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fencing_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    enqueued_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SystemSetting(Base):
+    """系统运行开关（SA-07C / ADR-010）：当前只有计划内并行开关。
+
+    值为字符串化布尔（"true"/"false"），缺省行不存在表示关闭；
+    仅管理员可写，Agent 通过 /internal/agent/runtime-config 只读获取。
+    """
+
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ModerationMark(Base):
+    """低风险内容打标（T-15-F / US-13）：巡检评估为低风险时按内容留痕。
+
+    同目标只保留最新一条（唯一约束），不改变内容可见性与编辑时间；
+    Agent 经 /internal/agent/patrol/marks 写入，管理员列表只读。
+    """
+
+    __tablename__ = "moderation_marks"
+    __table_args__ = (
+        UniqueConstraint("target_type", "target_id", name="uq_moderation_mark_target"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    risk_level: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="low", server_default="low"
+    )
+    reason: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    agent_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class McpCallLog(Base):
+    """MCP 外部调用审计（T-17 N-04 / US-18）：只存脱敏摘要，不存参数与结果原文。
+
+    服务 token 写入，管理员只读检索；客户端凭证不落库。
+    """
+
+    __tablename__ = "mcp_call_logs"
+    __table_args__ = (
+        Index("ix_mcp_call_logs_created_at", "created_at"),
+        Index("ix_mcp_call_logs_trace_id", "trace_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    args_summary: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    result_summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class AgentRunControl(Base):
+    """运行控制状态（T-21A / RC-R01）：每个运行一行，revision 单调递增用于跨实例 fencing。
+
+    不设外键：运行归档删除后控制行保留短期审计价值，由清理任务单独收敛。
+    """
+
+    __tablename__ = "agent_run_controls"
+
+    agent_run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # running / paused / cancelling / cancelled
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pause_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AgentRunCommand(Base):
+    """运行控制命令（T-21A / RC-R01～R03）：追加式，消费后清空引导正文只留摘要。"""
+
+    __tablename__ = "agent_run_commands"
+    __table_args__ = (
+        Index("ix_agent_run_commands_run_status", "agent_run_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    # pause / resume / cancel / guidance
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    guidance_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    guidance_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # pending / applied / expired
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    # 空表示系统自动命令（暂停超时），非空为管理员 id
+    requested_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class WorkflowSkill(Base):
+    """工作流 skill 定义（T-22A / SK-R01～R04）：团队共享知识，不构成授权依据。
+
+    发布通过 current_version 指向已发布版本；归档只改 status，不删除版本行，
+    保证历史运行对旧版本的引用仍可读（SK-R04）。
+    """
+
+    __tablename__ = "workflow_skills"
+    __table_args__ = (
+        Index("ix_workflow_skills_task_status", "task_type", "status"),
+        Index("ix_workflow_skills_course_id", "course_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # 任务类型：与 Agent 任务分类一致（如 moderation_scan / patrol_scan / chat）
+    task_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    # 课程限定；为空表示全局 skill
+    course_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("courses.id"), nullable=True
+    )
+    # draft / active / disabled / archived
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft", index=True
+    )
+    # 当前注入版本；草稿阶段为空，发布后指向 workflow_skill_versions.version
+    current_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WorkflowSkillVersion(Base):
+    """skill 版本内容（T-22A / SK-R02）：(skill_id, version) 唯一，运行读取固定版本。
+
+    content 只存适用条件、步骤、提示要点、检查清单与阈值；AI 提案为 draft，
+    管理员发布后置 published，历史 published 版本保留以支持回滚。
+    """
+
+    __tablename__ = "workflow_skill_versions"
+
+    skill_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("workflow_skills.id"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # conditions / steps / tips / checks / max_tokens
+    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # 提案来源运行；管理员手工新增为空
+    source_run_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    # draft / published
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    published_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

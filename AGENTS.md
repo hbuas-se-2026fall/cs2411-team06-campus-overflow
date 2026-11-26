@@ -12,22 +12,23 @@ CampusOverflow AI：面向高校课程场景的智能问答平台。三个服务
 | 前端 | `campus-overflow-ai/frontend/` | Next.js 16（App Router）+ React 19 + TypeScript 5 + Tailwind CSS 4 + @ai-sdk/react（Agent 流式 UI） | 二期补完中 |
 | Agent 服务 | `campus-overflow-ai/agent/` | TypeScript 5 + Vercel AI SDK 7 + Hono/Nitro + Workflow + Zod v4 + MCP Adapter（Node ≥ 24.0.0，ESM；2026-11-03随agent-browser升级） | 二期实施中，Workflow治理接线仍按WF分期 |
 
-> **范围说明**（spec v3 / Q-08，2026-09-20）：本期只做业务后端；Agent 服务不搭建（`/internal/agent/*` 仅保留前缀注释与 TODO 事件钩子），治理逻辑仅建表 + 501 占位；前端页面随第二阶段实施。
-> **当前范围**（2026-10-10）：一期业务后端（T-01~T-10）与二期 T-11~T-13 已完成；前端在代码基线内并持续补完，F-C5 助教申请、教师审核与助教推荐入口已随 PR #28 落地。T-14~T-17 尚未实施；Phase 4（T-18~T-20）推迟至第三期部署阶段。46e3bf8 同批后端契约接口（`mine`、`is_owner`/`can_post`、`course_name`、`GET /api/users/{id}/questions|answers`、`GET /api/tags/{id}`、PATCH 显式清空）为正式接口，保留不删。
+> **当前范围**：以 [specs/status.md](./specs/status.md) 为唯一进度源。当前为二期收尾 + 部署准备：T-01～T-17 已完成（T-16-C/D 于 2026-11-24 补齐，父任务已验收），T-19/T-20 已完成；剩余 F-C6、T-18 部署件与真实环境验收。旧 Q-08“本期只做业务后端”已失效。
 > **角色模型**（spec v3）：RBAC 三角色 student / teacher / admin；助教不是独立角色——研究生身份且助教认证通过 → 助教能力位（`require_graduate_assistant`），解锁学生端助教板块（US-20）。
 
-文档与规格在根目录：`docs/`（需求、架构、流程）、`specs/`（constitution/spec/plan/tasks/analyze）、`.trae/rules/`（工程规则）。
+文档与规格：`specs/`（constitution/spec/plan/tasks/status/analyze）、`docs/`（需求、架构、决策、审查记录）、`.trae/rules/`（工程规则与需求流程）。当前状态只看 `specs/status.md`，决策只看 `docs/decisions/`。
 
 **遇事原则**：对需求、架构、接口、流程有任何不清楚的地方，先查 `docs/` 下的相关文档；文档仍无法解答时，直接向用户提问确认，不要自行猜测。
 
 ## 工作流程（规格驱动，必须遵守）
 
-执行路径：`constitution → specify → clarify → plan → tasks → analyze → implement`，详见 [docs/workflow.md](./docs/workflow.md)。
+需求入口与 DoR/DoD 见 [requirement-process.md](./.trae/rules/requirement-process.md)。规格执行路径：`constitution → specify → clarify → plan → tasks → analyze → implement`，详见 [docs/workflow.md](./docs/workflow.md)。
 
 - **spec.md 只写需求（WHAT）**，禁止写入技术实现细节；实现方案只能进 plan.md。
 - **宪法（constitution.md）优先级最高**，与任何文档或代码冲突时以宪法为准。
 - **修改 spec / plan / tasks 后，进入 implement 前必须重跑一致性分析**（specs/analyze.md）。
-- **tasks.md 严格按 Phase 顺序执行**，每完成一项打勾；失败时回改上游文档，不跳过。当前执行以 tasks.md 的最新范围注和勾选状态为准。
+- **tasks.md 严格按 Phase 顺序执行**，每完成一项打勾；失败时回改上游文档，不跳过。当前执行以 `specs/status.md` 与 tasks.md 勾选为准。
+- **一个事实只写一处**：进度只写 `status.md`，决策只写 `docs/decisions/`，规则不追加历史状态。
+- **新需求先走共创协议**：默认按七问 grill 用户，整理成 `specs/requirements/R-XXX-<slug>.md`，确认后才开工；仅用户明确说“跳过七问”的小修可豁免。
 - **快捷命令**：`/spec <任务号>` 等价于 `/speckit.implement <任务号>`，默认上下文为 AGENTS.md、specs/、docs/（按需），收尾动作为勾选 `specs/tasks.md`；细则见 [docs/workflow.md](./docs/workflow.md) "快捷命令 /spec" 一节。
 
 ## 增量开发纪律（implement 阶段必须遵守）
@@ -51,7 +52,7 @@ CampusOverflow AI：面向高校课程场景的智能问答平台。三个服务
 6. 界面文案使用简体中文。（一期指后端错误消息与接口描述文案）
 7. 规则必须是可检查的：代码需通过 `ruff check`（后端）、`eslint`（前端/Agent）零 error。
 8. 核心流程必须有测试：后端 pytest、前端与 Agent vitest。（编写要求不变；执行分层为开发期冒烟、CI 全量，见 [.trae/rules/coding-style.md](./.trae/rules/coding-style.md) "测试执行分层"）
-9. **子 Agent 上下文隔离**：Agent 采用主 Agent 编排 + 子 Agent 池，每实例最多 8 个（3 治理 + 5 问答）；任务间不得共享可变上下文、凭证、会话或工具授权，槽位复用必须整体重建；子 Agent 不写共享记忆，外部执行走沙箱。（C-09；设计见 plan AX-R09，任务 SA-01～SA-06 尚未实施）
+9. **子 Agent 上下文隔离**：Agent 采用主 Agent 编排 + 子 Agent 池，每实例最多 8 个（3 治理 + 5 问答）；任务间不得共享可变上下文、凭证、会话或工具授权，槽位复用必须整体重建；子 Agent 不写共享记忆，外部执行走沙箱。（C-09；设计见 plan AX-R09；SA-01/02B/06 已落地，SA-03/04/05 待生产验收，状态以 `specs/tasks.md` 为准）
 
 ## 常用命令
 

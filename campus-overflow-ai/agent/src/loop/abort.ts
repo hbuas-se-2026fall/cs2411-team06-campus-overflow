@@ -1,14 +1,16 @@
-export type RunStopKind = "cancelled" | "timeout" | "upstream_timeout";
+export type RunStopKind = "cancelled" | "pause_timeout" | "timeout" | "upstream_timeout";
 
 export class RunStoppedError extends Error {
   readonly status: 408 | 504;
   readonly summary: string;
   constructor(readonly kind: RunStopKind) {
-    const summary = kind === "cancelled" ? "任务已取消" : kind === "timeout" ? "任务运行超时" : "上游请求超时";
-    super(kind === "cancelled" ? summary : `${summary}，请重试`);
+    const summary = kind === "cancelled" ? "任务已取消"
+      : kind === "pause_timeout" ? "暂停超时，任务已取消"
+        : kind === "timeout" ? "任务运行超时" : "上游请求超时";
+    super(kind === "cancelled" || kind === "pause_timeout" ? summary : `${summary}，请重试`);
     this.name = "RunStoppedError";
     this.summary = summary;
-    this.status = kind === "cancelled" ? 408 : 504;
+    this.status = kind === "cancelled" || kind === "pause_timeout" ? 408 : 504;
   }
 }
 

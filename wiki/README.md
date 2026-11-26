@@ -21,15 +21,17 @@ CampusOverflow AI：面向高校课程场景的 AI 问答与内容治理平台�
 
 ## 当前状态
 
-- 业务后端一期完成，二期继续扩展；前端持续补完。
-- Agent 的治理、工具、RAG、MCP 主链路已实现，相关能力默认关闭。
-- 效果类结论仍缺真实 embedding、人工标注评测集与生产部署证据，Wiki 中不给出未经测得的数字。
+完整状态与下一步见 [specs/status.md](../specs/status.md)，本页只保留稳定结论：
+
+- 业务后端一期完成；前端 F-C1～F-C5 完成，F-C6 未完成。
+- Agent 治理、工具、RAG、MCP 主链路已实现，相关能力默认关闭；T-14～T-17 剩余子项已登记，父任务未验收。
+- 生产部署与 RAG 效果评测未完成；Wiki 不给出未经测得的数字。
 
 ## 维护约定
 
 - 燃尽图由 `wiki/tools/burndown.mjs` 从 `specs/tasks.md` 的 git 历史生成，不手工改图。
+- `specs/` 与 `docs/decisions/` 已纳入 Git；历史燃尽存在断档，当前进度以 `specs/status.md` 为准。
 - 页面只写可核对的结论；涉及未验证能力时明确标注“未验证”。
-- 代码位置以仓库当前路径为准，`docs/` 与 `specs/` 保留在本地、不随仓库发布。
 
 ## 发布到 GitHub Wiki
 

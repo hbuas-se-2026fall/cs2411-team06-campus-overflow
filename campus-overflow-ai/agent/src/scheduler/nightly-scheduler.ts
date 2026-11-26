@@ -35,10 +35,16 @@ export const nextNightlyOccurrence = (config: NightlyConfig, from: Date): Date =
   return next;
 };
 
+export interface NightlyLease {
+  release: () => Promise<void>;
+}
+
 export interface NightlyDeps {
   createClient: () => UserInternalClient;
   getCatalog?: () => KnowledgeCatalog | undefined;
   syncQaSnapshot?: () => Promise<{ version: string; items: number }>;
+  /** P0-1：跨实例互斥租约；返回 null 表示其他实例正在执行，本次跳过。 */
+  acquireLease?: () => Promise<NightlyLease | null>;
   config?: NightlyConfig;
   now?: () => Date;
 }
@@ -68,7 +74,20 @@ export const startNightlyConsolidationScheduler = (deps: NightlyDeps): (() => vo
       }));
     } else {
       running = true;
+      let lease: NightlyLease | null = null;
+      if (deps.acquireLease) {
+        try {
+          lease = await deps.acquireLease();
+        } catch {
+          lease = null;
+        }
+      }
       try {
+        if (deps.acquireLease && !lease) {
+          console.log(JSON.stringify({
+            event: "nightly_consolidation_skipped", reason: "lease_unavailable",
+          }));
+        } else {
         if (config.snapshotEnabled) {
           try {
             const catalog = deps.getCatalog?.();
@@ -125,6 +144,7 @@ export const startNightlyConsolidationScheduler = (deps: NightlyDeps): (() => vo
           client: deps.createClient(), days: config.days,
         });
         console.log(JSON.stringify({ event: "nightly_consolidation_done", ...outcome }));
+        }
       } catch (error) {
         console.error(JSON.stringify({
           event: "nightly_consolidation_failed",
@@ -132,6 +152,12 @@ export const startNightlyConsolidationScheduler = (deps: NightlyDeps): (() => vo
         }));
       } finally {
         running = false;
+        try {
+          await lease?.release();
+        } catch {
+          // 释放失败由租约 TTL 兜底；不能让调度器停止后续日期
+          console.error(JSON.stringify({ event: "nightly_lease_release_failed" }));
+        }
       }
     }
     schedule();

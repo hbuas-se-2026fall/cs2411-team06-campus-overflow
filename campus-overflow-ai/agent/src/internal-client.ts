@@ -15,6 +15,7 @@ import {
   type GovernanceRequestAck, type GovernanceRequestInput, type GovernanceState,
 } from "./approvals/types.js";
 import { createAuditClient, type AuditClient } from "./observability/audit-client.js";
+import type { SandboxAuditEvent } from "./sandbox/contracts.js";
 import { checkSignal, withUpstreamDeadline } from "./loop/abort.js";
 import type { TraceId } from "./types/index.js";
 
@@ -123,6 +124,21 @@ export interface WeeklyReportSaveBody {
   agent_run_id: string;
 }
 
+/** 增量同步问题条目（GET /internal/agent/sync/questions，T-17 N-05） */
+export interface SyncQuestionItem {
+  id: number;
+  title: string;
+  course_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SyncQuestionsResult {
+  items: SyncQuestionItem[];
+  next_cursor: number;
+  has_more: boolean;
+}
+
 /** 巡检内容条目（GET /internal/agent/patrol/contents，T-15-B 补充端点） */
 export interface PatrolContentItem {
   target_type: "question" | "answer" | "comment";
@@ -145,6 +161,27 @@ export interface PatrolCaseBody {
 /** 巡检建单响应：data.repeat=true 表示同目标已有未结案工单（幂等跳过） */
 export interface PatrolCaseAck {
   repeat: boolean;
+}
+
+/** 低风险内容打标请求体（POST /internal/agent/patrol/marks，T-15-F；蛇形） */
+export interface PatrolMarkBody {
+  target_type: "question" | "answer" | "comment";
+  target_id: number;
+  risk_level: "low";
+  reason: string;
+  agent_run_id: string;
+}
+
+export interface PatrolMarkAck {
+  id: number;
+  target_type: "question" | "answer" | "comment";
+  target_id: number;
+  risk_level: string;
+  reason: string;
+  agent_run_id: string;
+  trace_id: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export type PatrolScanTargetType = "question" | "answer" | "comment";
@@ -251,6 +288,77 @@ export interface InjectedPatrolNotes {
   max_chars: number;
 }
 
+/** 运行控制命令与状态（T-21C / RC-R01～R05）：Agent 只跟随后端权威状态。 */
+export const RunControlCommandSchema = z.object({
+  id: z.number().int().positive(),
+  revision: z.number().int().nonnegative(),
+  action: z.enum(["pause", "resume", "cancel", "guidance"]),
+  guidance_text: z.string().nullable().optional(),
+  guidance_digest: z.string().nullable().optional(),
+  requested_by: z.number().int().nullable().optional(),
+  trace_id: z.string().optional(),
+});
+export type RunControlCommandItem = z.infer<typeof RunControlCommandSchema>;
+
+export const RunControlSnapshotSchema = z.object({
+  enabled: z.boolean(),
+  state: z.enum(["running", "paused", "cancelled"]),
+  revision: z.number().int().nonnegative(),
+  pause_deadline: z.string().nullable().optional(),
+  commands: z.array(RunControlCommandSchema).max(50),
+});
+export type RunControlSnapshotItem = z.infer<typeof RunControlSnapshotSchema>;
+
+/** 工作流 skill 摘要（GET /internal/agent/skills，T-22C / SK-R03） */
+export interface WorkflowSkillSummaryItem {
+  id: number;
+  name: string;
+  taskType: string;
+  courseId?: number;
+  version: number;
+  summary: string;
+  stepCount: number;
+}
+
+/** 工作流 skill 当前注入版本详情（GET /internal/agent/skills/{id}/versions/{version}） */
+export interface WorkflowSkillVersionItem {
+  skillId: number;
+  version: number;
+  content: {
+    conditions: string[];
+    steps: string[];
+    tips: string[];
+    checks: string[];
+    maxTokens: number;
+  };
+}
+
+const WorkflowSkillListSchema = z.object({
+  items: z.array(z.object({
+    id: z.number().int().positive(),
+    name: z.string().min(1).max(200),
+    task_type: z.string().min(1).max(40),
+    course_id: z.number().int().positive().nullable().optional(),
+    version: z.number().int().positive(),
+    summary: z.string(),
+    step_count: z.number().int().nonnegative(),
+  })).max(50),
+});
+
+const WorkflowSkillContentSchema = z.object({
+  conditions: z.array(z.string()).default([]),
+  steps: z.array(z.string()).default([]),
+  tips: z.array(z.string()).default([]),
+  checks: z.array(z.string()).default([]),
+  max_tokens: z.number().int().nonnegative().default(1500),
+});
+
+const WorkflowSkillVersionSchema = z.object({
+  skill_id: z.number().int().positive(),
+  version: z.number().int().positive(),
+  content: WorkflowSkillContentSchema,
+});
+
 export interface InternalClient {
   searchCourses(params: { keyword: string; limit?: number }, traceId: TraceId): Promise<CourseSearchResult[]>;
   searchQuestions(
@@ -277,6 +385,12 @@ export interface InternalClient {
     traceId: TraceId,
   ): Promise<PatrolContentItem[]>;
   createPatrolCase(body: PatrolCaseBody, traceId: TraceId): Promise<PatrolCaseAck>;
+  /** 增量同步可见问题（T-17 N-05）：id 升序游标，不含正文与作者 */
+  syncQuestions(
+    params: { updatedAfter: string; cursor?: number; limit?: number },
+    traceId: TraceId,
+  ): Promise<SyncQuestionsResult>;
+  createPatrolMark(body: PatrolMarkBody, traceId: TraceId): Promise<PatrolMarkAck>;
   createPatrolScan(
     params: { targetTypes?: PatrolScanTargetType[]; createdBy?: number },
     traceId: TraceId,
@@ -333,6 +447,20 @@ export interface InternalClient {
     traceId: TraceId,
   ): Promise<InjectedPatrolNotes>;
   fetchLearningFeedback?(params: { courseId: number; days?: number }, traceId: TraceId): Promise<LearningFeedback>;
+  /** 工作流 skill 摘要（T-22C）：active 且已发布固定版本，按任务类型与课程匹配。 */
+  fetchWorkflowSkills?(
+    params: { taskType: string; courseId?: number },
+    traceId: TraceId,
+  ): Promise<WorkflowSkillSummaryItem[]>;
+  /** 工作流 skill 当前注入版本详情（T-22C）：仅展开排名第 1 条。 */
+  fetchWorkflowSkillVersion?(
+    params: { skillId: number; version: number },
+    traceId: TraceId,
+  ): Promise<WorkflowSkillVersionItem>;
+  /** 运行控制状态拉取（T-21C）：since_revision 之后仍未消费的命令。 */
+  getRunControl?(agentRunId: string, sinceRevision: number, traceId: TraceId): Promise<RunControlSnapshotItem>;
+  /** 控制命令消费确认（T-21C）：重复 ack 幂等，返回本次实际标记数量。 */
+  ackRunControl?(agentRunId: string, commandIds: readonly number[], traceId: TraceId): Promise<number>;
 }
 
 export interface UserInternalClient extends InternalClient {
@@ -344,6 +472,16 @@ export interface UserInternalClient extends InternalClient {
     traceId: TraceId,
   ): Promise<GovernanceState>;
   createGovernanceRequest(body: GovernanceRequestInput, traceId: TraceId): Promise<GovernanceRequestAck>;
+  /** 高风险动作待确认工单（T-15 / N-07）：仅创建，不执行 */
+  createApproval(body: {
+    action_type: string;
+    risk_level: "low" | "medium" | "high";
+    payload_snapshot: string;
+    target_type?: string;
+    target_id?: number;
+    reason?: string;
+    agent_run_id?: string;
+  }, traceId: TraceId): Promise<{ id: number; status: string }>;
   readApprovalWait(requestId: string, operation: "read" | "resume" | "cancel", traceId: TraceId): Promise<ApprovalWait>;
   fetchCatalogTags(traceId: TraceId): Promise<TrustedKnowledgeTag[]>;
   fetchTrustedTags(courseId: number, traceId: TraceId): Promise<Array<TrustedKnowledgeTag & { tag_id: number; name: string }>>;
@@ -353,6 +491,38 @@ export interface UserInternalClient extends InternalClient {
   verifyCertifiedAnswer(answerId: number, traceId: TraceId): Promise<{ certified: boolean; visible: boolean; course_id: number; question_id: number; answer_id: number; url: string }>;
   proposeClassChange(body: ClassChangeInput, traceId: TraceId): Promise<ClassChangeResult>;
   readClassChange(requestId: string, traceId: TraceId): Promise<ClassChangeResult>;
+  /** P0-3 聊天可恢复流：幂等登记、按序追加、续接读取与取消。 */
+  ensureChatStream(
+    requestId: string,
+    body: { agent_run_id?: string; trace_id?: string },
+    traceId: TraceId,
+  ): Promise<ChatStreamSnapshot>;
+  appendChatStreamEvent(
+    requestId: string,
+    body: { seq: number; event_type: ChatEventType; data: string },
+    traceId: TraceId,
+  ): Promise<ChatStreamEventAck>;
+  readChatStream(requestId: string, after: number, traceId: TraceId): Promise<ChatStreamRead>;
+  cancelChatStream(requestId: string, traceId: TraceId): Promise<ChatStreamSnapshot>;
+}
+
+/** MCP 调用审计写入体（T-17 N-04）：只含脱敏摘要与 trace。 */
+export interface McpCallAuditBody {
+  client_name: string;
+  tool_name: string;
+  status: "succeeded" | "failed" | "denied" | "unregistered" | "rejected";
+  args_summary: string;
+  result_summary?: string | null;
+  error_summary?: string | null;
+  duration_ms: number;
+  trace_id: string;
+}
+
+/** P0-4 沙箱审计只走服务凭证：系统级事件不携带用户身份。 */
+export interface SandboxAuditRecorder {
+  recordSandboxEvent(event: SandboxAuditEvent, traceId: TraceId): Promise<{ id: number }>;
+  /** MCP 调用审计（T-17 N-04）：只提交脱敏摘要，不提交凭证与原文 */
+  recordMcpCall(body: McpCallAuditBody, traceId: TraceId): Promise<{ id: number; status: string }>;
 }
 
 const buildUrl = (baseUrl: string, path: string, query: Record<string, string | undefined>): string => {
@@ -420,6 +590,29 @@ const PatrolContentsSchema = z.object({
   total: z.number().int().nonnegative(),
 });
 const PatrolCaseAckSchema = z.object({ repeat: z.boolean() });
+/** 增量同步响应（T-17 N-05） */
+const SyncQuestionsSchema = z.object({
+  items: z.array(z.object({
+    id: z.number().int().positive(),
+    title: z.string(),
+    course_id: z.number().int().positive(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })),
+  next_cursor: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+});
+const PatrolMarkAckSchema = z.object({
+  id: z.number().int().positive(),
+  target_type: z.enum(["question", "answer", "comment"]),
+  target_id: z.number().int().positive(),
+  risk_level: z.string(),
+  reason: z.string(),
+  agent_run_id: z.string(),
+  trace_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
 const PatrolScanJobSchema = z.object({
   id: z.number().int().positive(),
   status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
@@ -527,6 +720,48 @@ const InjectedPatrolNotesSchema = z.object({
   max_chars: z.number().int(),
 });
 
+// ---------- 聊天可恢复流（P0-3） ----------
+
+export const CHAT_EVENT_TYPES = ["meta", "delta", "notice", "done", "error"] as const;
+export type ChatEventType = (typeof CHAT_EVENT_TYPES)[number];
+
+export const ChatStreamSnapshotSchema = z.object({
+  request_id: z.string(),
+  status: z.enum(["running", "succeeded", "failed", "cancelled"]),
+  cancel_requested: z.boolean(),
+  agent_run_id: z.string().nullable(),
+  trace_id: z.string().nullable(),
+  expires_at: z.string(),
+  created: z.boolean(),
+});
+export type ChatStreamSnapshot = z.infer<typeof ChatStreamSnapshotSchema>;
+
+export const ChatStreamEventItemSchema = z.object({
+  seq: z.number().int().positive(),
+  event_type: z.string(),
+  data: z.string(),
+});
+export type ChatStreamEventItem = z.infer<typeof ChatStreamEventItemSchema>;
+
+export const ChatStreamReadSchema = ChatStreamSnapshotSchema.extend({
+  events: z.array(ChatStreamEventItemSchema),
+});
+export type ChatStreamRead = z.infer<typeof ChatStreamReadSchema>;
+
+export const ChatStreamEventAckSchema = z.object({
+  seq: z.number().int().positive(),
+  status: z.string(),
+  duplicate: z.boolean(),
+});
+export type ChatStreamEventAck = z.infer<typeof ChatStreamEventAckSchema>;
+
+/** 沙箱审计回执：只关心是否落库，不信任后端回显的其余字段。 */
+const SandboxEventAckSchema = z.object({ id: z.number().int().positive() });
+/** MCP 调用审计写入响应（T-17 N-04） */
+const McpCallAckSchema = z.object({ id: z.number().int().positive(), status: z.string() });
+/** 审批工单创建响应（T-17 N-07：高风险外部 MCP 工具） */
+const ApprovalTicketSchema = z.object({ id: z.number().int().positive(), status: z.string() });
+
 const createRequest = (config: InternalClientConfig) => {
   return async <T>(
     path: string,
@@ -566,7 +801,9 @@ const createRequest = (config: InternalClientConfig) => {
   };
 };
 
-export const createInternalClient = (config: InternalClientConfig): UserInternalClient => {
+export const createInternalClient = (
+  config: InternalClientConfig,
+): UserInternalClient & SandboxAuditRecorder => {
   // 即使传空凭证也不退回服务检索，由后端拒绝无效用户身份。
   const prefix = config.authorization === undefined ? "/internal/agent" : "/internal/agent/user";
   const request = createRequest(config);
@@ -628,6 +865,40 @@ export const createInternalClient = (config: InternalClientConfig): UserInternal
     },
     fetchLearningFeedback: async (params, trace) => request(`/internal/agent/learning-feedback/${z.number().int().positive().parse(params.courseId)}`,
       { days: params.days?.toString() }, trace, LearningFeedbackSchema),
+    fetchWorkflowSkills: async (params, trace) => {
+      const data = await request("/internal/agent/skills", {
+        task_type: params.taskType,
+        course_id: params.courseId?.toString(),
+      }, trace, WorkflowSkillListSchema);
+      return data.items.map(item => ({
+        id: item.id,
+        name: item.name,
+        taskType: item.task_type,
+        courseId: item.course_id ?? undefined,
+        version: item.version,
+        summary: item.summary,
+        stepCount: item.step_count,
+      }));
+    },
+    fetchWorkflowSkillVersion: async (params, trace) => {
+      const skillId = z.number().int().positive().parse(params.skillId);
+      const version = z.number().int().positive().parse(params.version);
+      const data = await request(
+        `/internal/agent/skills/${skillId}/versions/${version}`, {}, trace,
+        WorkflowSkillVersionSchema,
+      );
+      return {
+        skillId: data.skill_id,
+        version: data.version,
+        content: {
+          conditions: data.content.conditions,
+          steps: data.content.steps,
+          tips: data.content.tips,
+          checks: data.content.checks,
+          maxTokens: data.content.max_tokens,
+        },
+      };
+    },
     recordLearningEvent: async (body, trace) => request("/internal/agent/user/learning-events", {}, trace,
       z.object({ event_id: z.uuid(), repeat: z.boolean() }), { method: "POST", body }),
     fetchPublishedExperiences: async (courseId, trace) => {
@@ -713,6 +984,9 @@ export const createInternalClient = (config: InternalClientConfig): UserInternal
       }
       return data;
     },
+    createApproval: async (body, traceId) => request(
+      "/internal/agent/approvals", {}, traceId, ApprovalTicketSchema, { method: "POST", body },
+    ),
     searchCourses: async (params, traceId) => {
       const data = await request(
         `${prefix}/courses/search`,
@@ -796,6 +1070,19 @@ export const createInternalClient = (config: InternalClientConfig): UserInternal
     },
     createPatrolCase: async (body, traceId) =>
       request("/internal/agent/patrol/cases", {}, traceId, PatrolCaseAckSchema, {
+        method: "POST", body,
+      }),
+    syncQuestions: async (params, traceId) => request(
+      "/internal/agent/sync/questions",
+      {
+        updated_after: params.updatedAfter,
+        cursor: params.cursor?.toString(),
+        limit: params.limit?.toString(),
+      },
+      traceId, SyncQuestionsSchema,
+    ),
+    createPatrolMark: async (body, traceId) =>
+      request("/internal/agent/patrol/marks", {}, traceId, PatrolMarkAckSchema, {
         method: "POST", body,
       }),
     createPatrolScan: async (params, traceId) =>
@@ -921,9 +1208,86 @@ export const createInternalClient = (config: InternalClientConfig): UserInternal
         },
         traceId, InjectedPatrolNotesSchema,
       ),
+    getRunControl: async (agentRunId, sinceRevision, traceId) => {
+      const id = z.string().min(1).max(64).parse(agentRunId);
+      return request(
+        `/internal/agent/runs/${encodeURIComponent(id)}/control`,
+        { since_revision: String(z.number().int().nonnegative().parse(sinceRevision)) },
+        traceId, RunControlSnapshotSchema,
+      );
+    },
+    ackRunControl: async (agentRunId, commandIds, traceId) => {
+      const id = z.string().min(1).max(64).parse(agentRunId);
+      const ids = z.array(z.number().int().positive()).max(50).parse([...commandIds]);
+      const data = await request(
+        `/internal/agent/runs/${encodeURIComponent(id)}/control/ack`, {}, traceId,
+        z.object({ applied: z.number().int().nonnegative() }),
+        { method: "POST", body: { command_ids: ids } },
+      );
+      return data.applied;
+    },
+    ensureChatStream: async (requestId, body, traceId) => {
+      const id = chatRequestId(requestId);
+      const data = await request(
+        `/internal/agent/user/chat-streams/${id}`, {}, traceId, ChatStreamSnapshotSchema,
+        { method: "PUT", body: {
+          ...(body.agent_run_id === undefined ? {} : { agent_run_id: body.agent_run_id }),
+          ...(body.trace_id === undefined ? {} : { trace_id: body.trace_id }),
+        } },
+      );
+      if (data.request_id !== id) throw new InternalApiError(502, 502, "聊天流标识不一致");
+      return data;
+    },
+    appendChatStreamEvent: async (requestId, body, traceId) => {
+      const id = chatRequestId(requestId);
+      const data = await request(
+        `/internal/agent/user/chat-streams/${id}/events`, {}, traceId, ChatStreamEventAckSchema,
+        { method: "POST", body },
+      );
+      if (data.seq !== body.seq) throw new InternalApiError(502, 502, "聊天事件序号不一致");
+      return data;
+    },
+    readChatStream: async (requestId, after, traceId) => {
+      const id = chatRequestId(requestId);
+      if (!Number.isInteger(after) || after < 0) throw new InternalApiError(400, 400, "事件游标不合法");
+      const data = await request(
+        `/internal/agent/user/chat-streams/${id}`,
+        after > 0 ? { after: String(after) } : {},
+        traceId, ChatStreamReadSchema,
+      );
+      if (data.request_id !== id) throw new InternalApiError(502, 502, "聊天流标识不一致");
+      let cursor = after;
+      for (const event of data.events) {
+        if (event.seq <= cursor) throw new InternalApiError(502, 502, "聊天事件游标回退");
+        cursor = event.seq;
+      }
+      return data;
+    },
+    cancelChatStream: async (requestId, traceId) => {
+      const id = chatRequestId(requestId);
+      const data = await request(
+        `/internal/agent/user/chat-streams/${id}/cancel`, {}, traceId, ChatStreamSnapshotSchema,
+        { method: "POST", body: {} },
+      );
+      if (data.request_id !== id) throw new InternalApiError(502, 502, "聊天流标识不一致");
+      return data;
+    },
+    recordSandboxEvent: (event, traceId) => request(
+      "/internal/agent/sandbox/events", {}, traceId, SandboxEventAckSchema,
+      { method: "POST", body: event },
+    ),
+    recordMcpCall: (body, traceId) => request(
+      "/internal/agent/mcp/calls", {}, traceId, McpCallAckSchema,
+      { method: "POST", body },
+    ),
   };
 };
 
+/** 聊天流请求 id 统一为小写 UUID，与后端存储键一致。 */
+const chatRequestId = (value: string): string => z.uuid().parse(value).toLowerCase();
+
 /** 默认实例：读环境变量；测试经 createInternalClient 注入 mock fetch */
-export const defaultInternalClient = (authorization: string, signal?: AbortSignal): UserInternalClient =>
+export const defaultInternalClient = (
+  authorization: string, signal?: AbortSignal,
+): UserInternalClient & SandboxAuditRecorder =>
   createInternalClient({ ...resolveInternalConfig(), authorization, signal, fetchImpl: fetch });
