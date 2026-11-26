@@ -1,10 +1,13 @@
 "use client";
 
+import { useState } from "react";
+
 import { MarkdownBody } from "@/shared/components";
 import type { AnswerListItem } from "@/shared/types/question";
 import { formatRelativeTime } from "@/shared/utils/format";
 
 import { VoteControl } from "./VoteControl";
+import { CommentList } from "./CommentList";
 
 export function AnswerCard({
   answer,
@@ -16,6 +19,8 @@ export function AnswerCard({
   onCertify,
   canRecommend = false,
   onRecommend,
+  currentUsername,
+  canModerate = false,
 }: {
   answer: AnswerListItem;
   canAccept: boolean;
@@ -26,7 +31,10 @@ export function AnswerCard({
   onCertify?: (answerId: number, certified: boolean) => void;
   canRecommend?: boolean;
   onRecommend?: (answerId: number, recommended: boolean) => void;
+  currentUsername?: string | null;
+  canModerate?: boolean;
 }) {
+  const [showComments, setShowComments] = useState(false);
   const isCertified = certificationSource === "assistant"
     ? answer.certified_by_assistant === true : answer.certified_by_teacher;
   return (
@@ -74,9 +82,16 @@ export function AnswerCard({
           <MarkdownBody content={answer.body} />
         </div>
 
-        {(canAccept && !answer.is_accepted) || canCertify || canRecommend ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {canAccept && !answer.is_accepted ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowComments((current) => !current)}
+            aria-expanded={showComments}
+            className="co-focusable cursor-pointer rounded-md border border-line bg-canvas px-3 py-1.5 text-[13px] font-medium text-ink transition-colors duration-150 ease-standard hover:bg-panel"
+          >
+            {showComments ? "收起评论" : "评论"}
+          </button>
+          {canAccept && !answer.is_accepted ? (
               <button
                 type="button"
                 onClick={() => onAccept(answer.id)}
@@ -104,7 +119,15 @@ export function AnswerCard({
                 {answer.recommended_by_assistant ? "取消推荐" : "标记推荐"}
               </button>
             ) : null}
-          </div>
+        </div>
+
+        {showComments ? (
+          <CommentList
+            targetType="answer"
+            targetId={answer.id}
+            currentUsername={currentUsername}
+            canModerate={canModerate}
+          />
         ) : null}
       </div>
     </article>

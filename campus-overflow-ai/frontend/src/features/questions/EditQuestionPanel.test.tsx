@@ -23,6 +23,12 @@ vi.mock("@/api/questions", () => ({
 // QuestionForm 内部拉课程下拉选项
 vi.mock("@/api/courses", () => ({
   listCourses: mocks.listCourses,
+  fetchCourses: mocks.listCourses,
+  fetchCourseDetail: vi.fn(async (id: number) => ({
+    id,
+    name: id === 3 ? "数据结构" : "操作系统",
+    code: `C${id}`,
+  })),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -101,7 +107,9 @@ describe("EditQuestionPanel", () => {
     expect(inputValue(screen.getByLabelText("正文"))).toBe(QUESTION.body);
 
     // 课程禁用 + 标签为只读 chip（TagPicker 搜索框不出现）
-    expect((screen.getByLabelText("课程") as HTMLSelectElement).disabled).toBe(true);
+    await waitFor(() =>
+      expect((screen.getByLabelText("课程") as HTMLSelectElement).disabled).toBe(true),
+    );
     // "数据结构" 同时出现在课程 option 与标签 chip，断言存在即可；"考研" 仅 chip 有
     expect(screen.getAllByText("数据结构").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("考研")).toBeTruthy();

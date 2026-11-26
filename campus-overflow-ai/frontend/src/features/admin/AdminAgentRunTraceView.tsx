@@ -14,17 +14,11 @@ import {
 import { useAsyncData } from "@/shared/hooks/useAsyncData";
 
 import { AdminRunControlPanel } from "./AdminRunControlPanel";
-
-const TASK_TYPE_LABELS: Record<string, string> = {
-  chat: "智能问答", suggest_tags: "标签推荐", similar_questions: "相似问题",
-  moderation_scan: "风险扫描", doc_draft: "文档草稿", knowledge_tree: "大纲分析",
-  teaching_report: "教学周报", moderation_patrol: "静默巡检",
-};
-
-const EVENT_LABELS: Record<string, string> = {
-  plan: "生成计划", step_started: "步骤开始",
-  step_succeeded: "步骤成功", step_failed: "步骤失败",
-};
+import {
+  AGENT_EVENT_LABELS,
+  AGENT_STATUS_LABELS,
+  AGENT_TASK_TYPE_LABELS,
+} from "./agentLabels";
 
 export function AdminAgentRunTraceView({ agentRunId }: { agentRunId: string }) {
   const state = useAsyncData(() => fetchAgentRunTrace(agentRunId), [agentRunId]);
@@ -49,9 +43,9 @@ export function AdminAgentRunTraceView({ agentRunId }: { agentRunId: string }) {
       <Card className="flex flex-col gap-3 p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-[18px] font-semibold text-ink">
-            {TASK_TYPE_LABELS[run.task_type] ?? run.task_type}
+            {AGENT_TASK_TYPE_LABELS[run.task_type] ?? run.task_type}
             <span className={`ml-3 text-[13px] font-normal ${run.status === "failed" ? "text-red-600" : "text-ink-muted"}`}>
-              {run.status === "succeeded" ? "已成功" : run.status === "failed" ? "已失败" : "运行中"}
+              {AGENT_STATUS_LABELS[run.status] ?? run.status}
             </span>
           </h2>
           <span className="font-mono text-[12px] text-ink-subtle">
@@ -88,7 +82,7 @@ export function AdminAgentRunTraceView({ agentRunId }: { agentRunId: string }) {
             {events.map((event) => (
               <li key={event.id} className="flex flex-wrap items-center gap-2">
                 <span className="text-ink-subtle">#{event.sequence_no}</span>
-                <span>{EVENT_LABELS[event.event_type] ?? event.event_type}</span>
+                <span>{AGENT_EVENT_LABELS[event.event_type] ?? event.event_type}</span>
                 {event.tool_name ? (
                   <span className="rounded bg-panel px-1.5 text-[12px]">{event.tool_name}</span>
                 ) : null}

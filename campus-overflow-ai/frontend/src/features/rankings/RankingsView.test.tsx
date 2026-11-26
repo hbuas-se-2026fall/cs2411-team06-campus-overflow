@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getRank: vi.fn(),
   listCourses: vi.fn(),
+  fetchPublicReputation: vi.fn(),
   push: vi.fn(),
 }));
 
@@ -14,6 +15,15 @@ vi.mock("@/api/reputation", () => ({
 // 课程榜 Select 的课程选项
 vi.mock("@/api/courses", () => ({
   listCourses: mocks.listCourses,
+  fetchCourses: mocks.listCourses,
+  fetchCourseDetail: vi.fn(async (id: number) => ({
+    id,
+    name: `课程 ${id}`,
+    code: `C${id}`,
+  })),
+}));
+vi.mock("@/api/users", () => ({
+  fetchPublicReputation: mocks.fetchPublicReputation,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -43,6 +53,13 @@ describe("RankingsView", () => {
   beforeEach(() => {
     mocks.getRank.mockResolvedValue({ items: RANK_ITEMS });
     mocks.listCourses.mockResolvedValue(COURSES);
+    mocks.fetchPublicReputation.mockImplementation(async (userId: number) => ({
+      user_id: userId,
+      username: RANK_ITEMS.find((item) => item.user_id === userId)?.username ?? "",
+      reputation_score: RANK_ITEMS.find((item) => item.user_id === userId)?.score ?? 0,
+      question_count: userId,
+      answer_count: userId + 10,
+    }));
   });
 
   afterEach(() => {
@@ -58,11 +75,49 @@ describe("RankingsView", () => {
     expect(screen.getByText("320")).toBeTruthy();
     // 周榜请求参数；名次 1~3 徽标 + 第 4 名纯文本
     expect(mocks.getRank).toHaveBeenCalledWith(expect.objectContaining({ period: "week" }));
-    expect(screen.getByText("1")).toBeTruthy();
-    expect(screen.getByText("3")).toBeTruthy();
-    expect(screen.getByText("4")).toBeTruthy();
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows[0].querySelectorAll("td")[0].textContent).toBe("1");
+    expect(rows[2].querySelectorAll("td")[0].textContent).toBe("3");
+    expect(rows[3].querySelectorAll("td")[0].textContent).toBe("4");
     // 周榜不显示课程选择
     expect(screen.queryByLabelText("选择课程")).toBeNull();
+  });
+
+  it("用公开声誉接口补齐每行提问数/回答数，采纳率继续明确占位", async () => {
+    render(<RankingsView initialTab="week" initialCourseId={null} />);
+    const alice = await screen.findByText("alice");
+    const row = alice.closest("tr");
+    expect(row).not.toBeNull();
+    expect(await within(row!).findByText("11")).toBeTruthy();
+    const cells = row!.querySelectorAll("td");
+    expect(cells[3].textContent).toBe("1");
+    expect(cells[4].textContent).toBe("11");
+    expect(cells[5].textContent).toBe("—");
+    expect(mocks.fetchPublicReputation).toHaveBeenCalledTimes(RANK_ITEMS.length);
+  });
+
+  it("单个用户声誉读取失败只让该行计数占位，不拖垮排行榜", async () => {
+    mocks.fetchPublicReputation.mockImplementation(async (userId: number) => {
+      if (userId === 1) throw new Error("声誉接口失败");
+      return {
+        user_id: userId,
+        username: RANK_ITEMS.find((item) => item.user_id === userId)?.username ?? "",
+        reputation_score: RANK_ITEMS.find((item) => item.user_id === userId)?.score ?? 0,
+        question_count: userId,
+        answer_count: userId + 10,
+      };
+    });
+    render(<RankingsView initialTab="week" initialCourseId={null} />);
+
+    const aliceRow = (await screen.findByText("alice")).closest("tr");
+    const bobRow = screen.getByText("bob").closest("tr");
+    expect(aliceRow).not.toBeNull();
+    expect(bobRow).not.toBeNull();
+    expect(aliceRow!.querySelectorAll("td")[3].textContent).toBe("—");
+    expect(aliceRow!.querySelectorAll("td")[4].textContent).toBe("—");
+    expect(bobRow!.querySelectorAll("td")[3].textContent).toBe("2");
+    expect(bobRow!.querySelectorAll("td")[4].textContent).toBe("12");
+    expect(screen.queryByText("加载失败")).toBeNull();
   });
 
   it("切换月榜：以 period=month 重新请求并写回 URL", async () => {

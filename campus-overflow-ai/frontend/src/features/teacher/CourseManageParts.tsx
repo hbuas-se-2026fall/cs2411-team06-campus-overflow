@@ -100,7 +100,7 @@ export function QuestionsTab({ courseId }: { courseId: number }) {
   );
 }
 
-// 问题管理行：标题/作者/回答数要点 + 行内 [隐藏内容] 入口（跳 /teacher/moderation 处置）
+// 问题管理行：教师课程范围工单接口未开放，处置入口禁用并说明。
 function QuestionManageRow({ question }: { question: QuestionListItem }) {
   return (
     <li className="flex min-h-[64px] items-center justify-between gap-4 rounded-lg border border-line bg-canvas px-5 py-3">
@@ -116,18 +116,19 @@ function QuestionManageRow({ question }: { question: QuestionListItem }) {
           <span>{question.answer_count} 回答</span>
         </p>
       </div>
-      <Link
-        href="/teacher/moderation"
-        className="co-focusable shrink-0 rounded-md border border-line bg-canvas px-3 py-1.5 text-[13px] font-medium text-ink transition-colors duration-150 ease-standard hover:bg-panel"
+      <Button
+        variant="ghost"
+        disabled
+        title="教师课程范围工单接口尚未开放"
       >
         隐藏内容
-      </Link>
+      </Button>
     </li>
   );
 }
 
 // 成员 Tab：成员分页表格（用户/角色/加入时间/移出）
-export function MembersTab({ courseId, showToast }: { courseId: number; showToast: ShowToast }) {
+export function MembersTab({ courseId }: { courseId: number }) {
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<CourseMember[]>([]);
   const [total, setTotal] = useState(0);
@@ -158,12 +159,6 @@ export function MembersTab({ courseId, showToast }: { courseId: number; showToas
     };
   }, [courseId, page, reloadToken]);
 
-  // TODO(接口差异)：后端仅提供 DELETE /courses/{id}/members/me（学生自退），
-  // 无教师移出成员接口 → 点击仅 Toast 兜底，不渲染假确认流程
-  function handleRemoveMember() {
-    showToast("error", "移出成员接口尚未开放");
-  }
-
   return (
     <div className="flex flex-col gap-3">
       {status === "loading" ? <LoadingSkeleton variant="list" count={4} /> : null}
@@ -181,6 +176,9 @@ export function MembersTab({ courseId, showToast }: { courseId: number; showToas
 
       {status === "ready" && items.length > 0 ? (
         <>
+          <p className="text-[12px] text-ink-subtle">
+            教师移出成员接口尚未开放，当前仅可查看成员。
+          </p>
           <div className="overflow-x-auto rounded-lg border border-line bg-canvas">
             <table className="w-full border-collapse text-left">
               <thead>
@@ -210,7 +208,11 @@ export function MembersTab({ courseId, showToast }: { courseId: number; showToas
                       {formatJoinedDate(member.joined_at)}
                     </td>
                     <td className="py-3 pr-4">
-                      <Button variant="ghost" onClick={handleRemoveMember}>
+                      <Button
+                        variant="ghost"
+                        disabled
+                        title="教师移出成员接口尚未开放"
+                      >
                         移出
                       </Button>
                     </td>
@@ -241,14 +243,7 @@ function formatJoinedDate(iso: string): string {
 }
 
 // 标签 Tab：本课程标签（来自详情聚合）+ 新建标签占位
-export function TagsTab({ tags, showToast }: { tags: TagListItem[]; showToast: ShowToast }) {
-  const [newTagName, setNewTagName] = useState("");
-
-  // TODO(接口差异)：后端无 POST /api/tags（标签随问题发布绑定）→ 点击确认仅 Toast 兜底
-  function handleCreateTag() {
-    showToast("error", "新建标签接口尚未开放");
-  }
-
+export function TagsTab({ tags }: { tags: TagListItem[] }) {
   return (
     <div className="flex flex-col gap-4">
       {tags.length === 0 ? (
@@ -269,15 +264,21 @@ export function TagsTab({ tags, showToast }: { tags: TagListItem[]; showToast: S
         <div className="flex items-end gap-2">
           <Input
             label="标签名称"
-            value={newTagName}
+            value=""
             maxLength={30}
             placeholder="如：动态规划"
-            onChange={(event) => setNewTagName(event.target.value)}
+            disabled
+            readOnly
           />
-          <Button variant="ghost" onClick={handleCreateTag}>
+          <Button
+            variant="ghost"
+            disabled
+            title="新建官方标签接口尚未开放"
+          >
             确认
           </Button>
         </div>
+        <p className="text-[12px] text-ink-subtle">新建官方标签接口尚未开放。</p>
       </div>
     </div>
   );
