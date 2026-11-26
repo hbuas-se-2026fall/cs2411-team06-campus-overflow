@@ -167,6 +167,59 @@ class ChatStreamEventConflictError(ChatStreamStateError):
     http_status = 409
 
 
+class RunControlStateError(DomainError):
+    """运行状态或任务类型不允许该控制动作（RC-R01/R05）。"""
+
+    http_status = 400
+
+
+class RunControlConflictError(DomainError):
+    """控制命令 revision 冲突：并发命令只能有一个生效（RC-R02）。"""
+
+    http_status = 409
+
+    def __init__(self, current_revision: int) -> None:
+        self.current_revision = current_revision
+        super().__init__(f"控制命令版本冲突，当前版本为 {current_revision}")
+
+
+class RunControlTransitionError(DomainError):
+    """当前控制状态不允许该动作：取消是终态，暂停/继续不可重复（T-21 修复）。"""
+
+    http_status = 409
+
+    def __init__(self, current_state: str, action: str) -> None:
+        self.current_state = current_state
+        self.action = action
+        if current_state == "cancelled":
+            message = "运行已取消，不能再次暂停、继续或追加引导"
+        elif current_state == "paused" and action == "pause":
+            message = "运行已处于暂停状态，不能重复暂停"
+        elif current_state == "running" and action == "resume":
+            message = "运行未暂停，无需继续"
+        else:
+            message = f"当前运行状态 {current_state} 不允许执行 {action}"
+        super().__init__(message)
+
+
+class RunControlDisabledError(DomainError):
+    """运行控制功能未启用（默认关闭，T-21F）。"""
+
+    http_status = 409
+
+
+class SkillNotFoundError(DomainError):
+    """工作流 skill 或其版本不存在（SK-R04）。"""
+
+    http_status = 404
+
+
+class SkillStateError(DomainError):
+    """skill 当前状态不允许该操作（归档后编辑、未发布启用、非法发布版本）。"""
+
+    http_status = 400
+
+
 class ReportSensitiveError(DomainError):
     """周报内容包含敏感信息（密钥/口令类原文），写入被拒绝（KN-R02 / C-07 精神）。"""
 
@@ -350,6 +403,16 @@ def ensure_run_event(history: list[dict], event: dict) -> None:
     """审计事件按计划/开始/完成追加，不能通过新计划重置调用预算。"""
     plans = [item for item in history if item["event_type"] == "plan"]
     revision = event["plan_revision"]
+    if event["event_type"] in (
+        "control_pause", "control_resume", "control_cancel", "control_guidance",
+    ):
+        # 控制事件不携带步骤信息，只标记发生时的计划版本（计划前为 0）
+        expected = plans[-1]["plan_revision"] if plans else 0
+        if (revision != expected or event["steps"] is not None
+                or event["step_id"] is not None or event["tool_name"] is not None
+                or event["duration_ms"] is not None):
+            raise RunStateError("控制事件字段不合法")
+        return
     pending = pending_audit_steps(history)
     if event["event_type"] == "plan":
         steps = event["steps"]

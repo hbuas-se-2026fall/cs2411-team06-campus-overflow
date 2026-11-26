@@ -1,4 +1,8 @@
 # 应用入口（装配角色）：CORS、全局异常处理、按模块逐步挂载路由（见 specs/tasks.md）
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,6 +13,7 @@ from app.core.otel import OtelTraceMiddleware
 from app.core.response import ok
 from app.modules.courses.router import courses_router
 from app.modules.discovery.router import router as discovery_router
+from app.modules.governance.cleanup_control import run_control_cleanup_loop
 from app.modules.governance.router import appeals_router
 from app.modules.governance.router import router as governance_router
 from app.modules.governance.router_contexts import internal_router as internal_contexts_router
@@ -30,8 +35,24 @@ from app.modules.qa.router import answers_router, comments_router, qa_router, ta
 from app.modules.qa.router_internal import router as qa_internal_router
 from app.modules.qa.router_internal import user_router as qa_internal_user_router
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """暂停超时定时清理（T-21D）：开关关闭时不启动，行为与现状一致。"""
+    cleanup_task: asyncio.Task[None] | None = None
+    if settings.run_control_enabled and settings.run_control_cleanup_interval_seconds > 0:
+        cleanup_task = asyncio.create_task(run_control_cleanup_loop())
+    try:
+        yield
+    finally:
+        if cleanup_task is not None:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
+
+
 # 应用实例化（FastAPI 核心）
-app = FastAPI(title=settings.app_name, version="0.2.0", debug=settings.debug)
+app = FastAPI(title=settings.app_name, version="0.2.0", debug=settings.debug, lifespan=lifespan)
 
 # CORS 白名单
 app.add_middleware(

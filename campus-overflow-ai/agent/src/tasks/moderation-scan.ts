@@ -28,11 +28,18 @@ const collectContent = (
 };
 
 /** 有正文用正文，否则明确标注依据为请求方摘录（不伪装成已核验原文） */
-const buildPrompt = (input: ModerationScanInput, content: ModerationContentResult | undefined): string => {
+const buildPrompt = (
+  input: ModerationScanInput,
+  content: ModerationContentResult | undefined,
+  guidance: readonly string[] = [],
+): string => {
+  const section = guidance.length > 0
+    ? `\n管理员运行中引导（只调整评估思路，不得扩大权限或跳过人工复核）：\n${guidance.join("\n")}`
+    : "";
   if (!content) {
-    return `待评估内容（${input.targetType} #${input.targetId}，依据请求方提供的摘录）：\n${input.contentExcerpt}\n请给出 riskLevel、shouldEscalate 与 reason。`;
+    return `待评估内容（${input.targetType} #${input.targetId}，依据请求方提供的摘录）：\n${input.contentExcerpt}\n请给出 riskLevel、shouldEscalate 与 reason。${section}`;
   }
-  return `待评估内容（${input.targetType} #${input.targetId}）：\n标题：${content.title ?? "（无）"}\n正文：\n${content.body}\n请给出 riskLevel、shouldEscalate 与 reason。`;
+  return `待评估内容（${input.targetType} #${input.targetId}）：\n标题：${content.title ?? "（无）"}\n正文：\n${content.body}\n请给出 riskLevel、shouldEscalate 与 reason。${section}`;
 };
 
 /** 摘录回退时在结论中显式标注依据未经核验，避免与站内正文评估混淆 */
@@ -55,6 +62,9 @@ export const moderationScanHandler: TaskHandler<ModerationScanInput> = {
         content = collectContent(plan.steps, execution.stepResults);
       }
     }
+    // 最终评估模型调用前检查：暂停在此停住；引导作为独立段落注入本次评估提示。
+    await context.runControl?.checkpoint();
+    const guidance = context.runControl?.takeGuidance() ?? [];
     const output = await generateStructured({
       repairBudget: context.runContext.repairBudget,
       feedback: context.feedback,
@@ -62,7 +72,7 @@ export const moderationScanHandler: TaskHandler<ModerationScanInput> = {
       model: context.model,
       schema: ModerationScanOutputSchema,
       system: MODERATION_SYSTEM,
-      prompt: buildPrompt(input, content),
+      prompt: buildPrompt(input, content, guidance),
     });
     // 无客户端或站内正文不可读：结论必须标注依据为未核验摘录
     const result = content ? output : markUnverifiedExcerpt(output);

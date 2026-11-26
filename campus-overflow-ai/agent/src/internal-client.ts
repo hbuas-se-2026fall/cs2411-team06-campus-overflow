@@ -288,6 +288,77 @@ export interface InjectedPatrolNotes {
   max_chars: number;
 }
 
+/** 运行控制命令与状态（T-21C / RC-R01～R05）：Agent 只跟随后端权威状态。 */
+export const RunControlCommandSchema = z.object({
+  id: z.number().int().positive(),
+  revision: z.number().int().nonnegative(),
+  action: z.enum(["pause", "resume", "cancel", "guidance"]),
+  guidance_text: z.string().nullable().optional(),
+  guidance_digest: z.string().nullable().optional(),
+  requested_by: z.number().int().nullable().optional(),
+  trace_id: z.string().optional(),
+});
+export type RunControlCommandItem = z.infer<typeof RunControlCommandSchema>;
+
+export const RunControlSnapshotSchema = z.object({
+  enabled: z.boolean(),
+  state: z.enum(["running", "paused", "cancelled"]),
+  revision: z.number().int().nonnegative(),
+  pause_deadline: z.string().nullable().optional(),
+  commands: z.array(RunControlCommandSchema).max(50),
+});
+export type RunControlSnapshotItem = z.infer<typeof RunControlSnapshotSchema>;
+
+/** 工作流 skill 摘要（GET /internal/agent/skills，T-22C / SK-R03） */
+export interface WorkflowSkillSummaryItem {
+  id: number;
+  name: string;
+  taskType: string;
+  courseId?: number;
+  version: number;
+  summary: string;
+  stepCount: number;
+}
+
+/** 工作流 skill 当前注入版本详情（GET /internal/agent/skills/{id}/versions/{version}） */
+export interface WorkflowSkillVersionItem {
+  skillId: number;
+  version: number;
+  content: {
+    conditions: string[];
+    steps: string[];
+    tips: string[];
+    checks: string[];
+    maxTokens: number;
+  };
+}
+
+const WorkflowSkillListSchema = z.object({
+  items: z.array(z.object({
+    id: z.number().int().positive(),
+    name: z.string().min(1).max(200),
+    task_type: z.string().min(1).max(40),
+    course_id: z.number().int().positive().nullable().optional(),
+    version: z.number().int().positive(),
+    summary: z.string(),
+    step_count: z.number().int().nonnegative(),
+  })).max(50),
+});
+
+const WorkflowSkillContentSchema = z.object({
+  conditions: z.array(z.string()).default([]),
+  steps: z.array(z.string()).default([]),
+  tips: z.array(z.string()).default([]),
+  checks: z.array(z.string()).default([]),
+  max_tokens: z.number().int().nonnegative().default(1500),
+});
+
+const WorkflowSkillVersionSchema = z.object({
+  skill_id: z.number().int().positive(),
+  version: z.number().int().positive(),
+  content: WorkflowSkillContentSchema,
+});
+
 export interface InternalClient {
   searchCourses(params: { keyword: string; limit?: number }, traceId: TraceId): Promise<CourseSearchResult[]>;
   searchQuestions(
@@ -376,6 +447,20 @@ export interface InternalClient {
     traceId: TraceId,
   ): Promise<InjectedPatrolNotes>;
   fetchLearningFeedback?(params: { courseId: number; days?: number }, traceId: TraceId): Promise<LearningFeedback>;
+  /** 工作流 skill 摘要（T-22C）：active 且已发布固定版本，按任务类型与课程匹配。 */
+  fetchWorkflowSkills?(
+    params: { taskType: string; courseId?: number },
+    traceId: TraceId,
+  ): Promise<WorkflowSkillSummaryItem[]>;
+  /** 工作流 skill 当前注入版本详情（T-22C）：仅展开排名第 1 条。 */
+  fetchWorkflowSkillVersion?(
+    params: { skillId: number; version: number },
+    traceId: TraceId,
+  ): Promise<WorkflowSkillVersionItem>;
+  /** 运行控制状态拉取（T-21C）：since_revision 之后仍未消费的命令。 */
+  getRunControl?(agentRunId: string, sinceRevision: number, traceId: TraceId): Promise<RunControlSnapshotItem>;
+  /** 控制命令消费确认（T-21C）：重复 ack 幂等，返回本次实际标记数量。 */
+  ackRunControl?(agentRunId: string, commandIds: readonly number[], traceId: TraceId): Promise<number>;
 }
 
 export interface UserInternalClient extends InternalClient {
@@ -780,6 +865,40 @@ export const createInternalClient = (
     },
     fetchLearningFeedback: async (params, trace) => request(`/internal/agent/learning-feedback/${z.number().int().positive().parse(params.courseId)}`,
       { days: params.days?.toString() }, trace, LearningFeedbackSchema),
+    fetchWorkflowSkills: async (params, trace) => {
+      const data = await request("/internal/agent/skills", {
+        task_type: params.taskType,
+        course_id: params.courseId?.toString(),
+      }, trace, WorkflowSkillListSchema);
+      return data.items.map(item => ({
+        id: item.id,
+        name: item.name,
+        taskType: item.task_type,
+        courseId: item.course_id ?? undefined,
+        version: item.version,
+        summary: item.summary,
+        stepCount: item.step_count,
+      }));
+    },
+    fetchWorkflowSkillVersion: async (params, trace) => {
+      const skillId = z.number().int().positive().parse(params.skillId);
+      const version = z.number().int().positive().parse(params.version);
+      const data = await request(
+        `/internal/agent/skills/${skillId}/versions/${version}`, {}, trace,
+        WorkflowSkillVersionSchema,
+      );
+      return {
+        skillId: data.skill_id,
+        version: data.version,
+        content: {
+          conditions: data.content.conditions,
+          steps: data.content.steps,
+          tips: data.content.tips,
+          checks: data.content.checks,
+          maxTokens: data.content.max_tokens,
+        },
+      };
+    },
     recordLearningEvent: async (body, trace) => request("/internal/agent/user/learning-events", {}, trace,
       z.object({ event_id: z.uuid(), repeat: z.boolean() }), { method: "POST", body }),
     fetchPublishedExperiences: async (courseId, trace) => {
@@ -1089,6 +1208,24 @@ export const createInternalClient = (
         },
         traceId, InjectedPatrolNotesSchema,
       ),
+    getRunControl: async (agentRunId, sinceRevision, traceId) => {
+      const id = z.string().min(1).max(64).parse(agentRunId);
+      return request(
+        `/internal/agent/runs/${encodeURIComponent(id)}/control`,
+        { since_revision: String(z.number().int().nonnegative().parse(sinceRevision)) },
+        traceId, RunControlSnapshotSchema,
+      );
+    },
+    ackRunControl: async (agentRunId, commandIds, traceId) => {
+      const id = z.string().min(1).max(64).parse(agentRunId);
+      const ids = z.array(z.number().int().positive()).max(50).parse([...commandIds]);
+      const data = await request(
+        `/internal/agent/runs/${encodeURIComponent(id)}/control/ack`, {}, traceId,
+        z.object({ applied: z.number().int().nonnegative() }),
+        { method: "POST", body: { command_ids: ids } },
+      );
+      return data.applied;
+    },
     ensureChatStream: async (requestId, body, traceId) => {
       const id = chatRequestId(requestId);
       const data = await request(

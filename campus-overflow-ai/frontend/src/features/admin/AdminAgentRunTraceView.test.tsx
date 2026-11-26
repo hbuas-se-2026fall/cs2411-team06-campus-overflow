@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/api/agent-runs", () => ({
   fetchAgentRunTrace: mocks.fetchAgentRunTrace,
   fetchAgentRuns: vi.fn(),
+  // T-21E 运行控制面板按任务类型决定是否请求，测试数据为非可控任务类型
+  fetchRunControl: vi.fn(),
+  applyRunControl: vi.fn(),
+  addRunGuidance: vi.fn(),
 }));
 
 import { AdminAgentRunTraceView } from "./AdminAgentRunTraceView";

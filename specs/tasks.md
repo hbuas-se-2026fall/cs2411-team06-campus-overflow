@@ -1,5 +1,29 @@
 # 任务清单（Tasks）
 
+## 2026-11-25 运行中人工控制与工作流 skill 沉淀（T-21/T-22，R-002 已确认）
+
+依据：spec RC-R01～R05 / SK-R01～R05、plan AX-R11、ADR-011、requirements/R-002。控制面只覆盖治理任务与管理员聊天；两个功能默认关闭；未完成不得勾选。
+
+### T-21 运行中暂停与追加引导
+
+- [x] T-21A 控制状态表与迁移：新增 `agent_run_controls`（运行状态、revision、pause_deadline）与 `agent_run_commands`（action、guidance、status、requested_by、trace），迁移 `rc01_run_control`；repository 只暴露普通字典。验收：`uv run alembic upgrade head` 可执行，revision 单调递增，重复 ack 幂等。专项 5 项、迁移、ruff、lint-imports 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-21A-控制状态表与迁移.md`。
+- [x] T-21B 管理与内部接口：`POST /api/governance/agent-runs/{id}/control`、`POST /api/governance/agent-runs/{id}/guidance`、内部 `GET .../control?since_revision=` 与 `POST .../control/ack`；revision 冲突 409、非管理员 403、非治理/管理员聊天 400、全量审计。验收：pytest 覆盖四类错误与成功路径。专项 12 项、相邻回归 80 项、ruff、lint-imports 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-21B-控制接口.md`。
+- [x] T-21C Agent 执行接线：`plan-executor` 在 step/模型调用前检查控制状态，paused 时 2s 轮询，resume 从断点继续、cancel 进入终态；管理员聊天在每次模型 turn 前同样检查；引导作为独立段落注入下一次 prompt，写 `control_*` 事件且正文不入库。验收：vitest 假后端覆盖暂停/恢复/取消/引导注入顺序。控制专项 8 项、相邻回归 150 项、typecheck、eslint 通过；后端事件契约扩展后专项 30 项 + governance 52 项、ruff 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-21C-Agent执行接线.md`。
+- [x] T-21D 超时与跨实例收敛：暂停超过 30 分钟由后端惰性判定 + 定时清理自动取消并释放占位，Agent 本地兜底；两实例共享同一状态，命令只被消费一次。验收：假时钟测试 + 双实例并发 ack 测试。后端四文件 84 项、ruff、lint-imports 5 contracts、迁移 `rc02_system_commands`；Agent 控制专项 7 项、相邻回归 48 项、typecheck/eslint 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-21D-超时收敛与跨实例.md`。
+- [x] T-21E 管理端最小页面：运行详情内暂停/继续/取消、引导词输入与状态回显；加载/空/错误状态齐全，交互有审计提示。验收：组件测试 + 手动走查。组件专项 8 项、相邻回归 11 项、tsc、eslint、check:rules 通过；手动走查待人工审查；见 `docs/审查记录/运行控制与skill/T-21E-管理端控制页.md`。
+- [x] T-21F 验收收口：关闭 `RUN_CONTROL_ENABLED` 时行为与现状一致；开启后回归预算（8 步/12 次/60 秒/180 秒）、审批与取消语义不变；status 与审查记录同步。Agent 关闭态 8 文件 158 项、开启态核心 5 文件 118 项、后端控制 71 项、typecheck/eslint 通过；真实环境手动走查待人工审查；见 `docs/审查记录/运行控制与skill/T-21F-开关关闭与回归收口.md`。
+- [x] 评审修复（T-21C/D、T-22A 范围）：暂停期间控制轮询失败/超时保持暂停，不再把空快照当成恢复；`cancelled` 为终态，后续 resume/pause/guidance 返回 409；控制命令透传真实 `X-Trace-Id`，不再伪造 `admin-{id}`；skill 两表纳入迁移基线排除集，并修复 Alembic 同进程迁移禁用应用 logger。后端全量 912 passed / 29 skipped，Agent 控制专项 26 项、typecheck/eslint、ruff、lint-imports 通过；见 `docs/审查记录/运行控制与skill/T-21-评审问题修复.md`。
+
+### T-22 长期工作流 skill 沉淀
+
+- [x] T-22A skill 表与迁移：新增 `workflow_skills` 与 `workflow_skill_versions`（含 content JSON、source_run_id、status、current_version），迁移 `sk01_workflow_skills`。验收：迁移可执行，版本唯一，归档不破坏历史引用。专项 4 项、迁移 `sk01_workflow_skills`、ruff、lint-imports 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-22A-skill表与迁移.md`。
+- [x] T-22B 管理接口：列表/详情、创建草稿、编辑、发布（新版本并置 current_version）、启停、归档删除、历史版本；仅 active 管理员，全部审计。验收：pytest 覆盖权限、版本递增、归档与发布回滚。专项 8 项、相邻治理回归 69 项、ruff、lint-imports 5 contracts 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-22B-管理接口.md`。
+- [x] T-22C 内部读取与 Agent 注入：`GET /internal/agent/skills` 与版本详情；Agent 按任务类型/课程匹配，≤3 条、≤4000 字符、额外 token ≤1500，仅展开第 1 条详情，30s TTL，失败降级为空。验收：vitest 覆盖匹配优先级、截断、缓存过期与后端失败。后端专项 3 项 + 相邻 8 项、ruff、lint-imports 5 contracts；Agent 专项 8 项、规划回归 37 项、typecheck、eslint 通过；待人工审查；见 `docs/审查记录/运行控制与skill/T-22C-内部读取与Agent注入.md`。
+- [ ] T-22D 提案生成：成功运行结束后从计划步骤/工具序列/检查项生成 draft 版本，过滤敏感与用户原文，附 `source_run_id`；AI 不可直接发布。验收：单测覆盖敏感过滤、来源关联与未发布不注入。
+- [ ] T-22E 管理端最小页面：skill 列表、编辑、发布/驳回、启停、归档删除与版本回看。验收：组件测试 + 手动走查。
+- [ ] T-22F 量化验收：新增 `bench:skill-reuse` 固定 20 条治理样本，关闭/开启对比；重复检索次数下降 ≥50%、输入 token 下降 ≥30%、成功率不降、P95 不劣化才允许默认开启。验收：对比报告入审查记录；未达标保持 `SKILL_INJECTION_ENABLED=false`。
+
+
 ## 2026-11-24 计划内无依赖步骤并行（SA-07，R-001 已确认）
 
 依据：spec SA-R07、plan AX-R10、ADR-010、requirements/R-001。默认关闭，开启后仅并发行内无依赖的只读步骤；一个 job 仍占一个槽。未完成不得勾选。

@@ -100,6 +100,26 @@ def test_duplicate_out_of_order_and_unmatched_finish_rejected(client, db_session
     assert db_session.query(ToolCallLog).count() == 1
 
 
+def test_control_events_follow_current_plan_without_touch_bypass(client, db_session, actors):
+    headers = auth(actors[0])
+    assert create_run(client, headers).status_code == 200
+    # 计划前的控制事件固定 revision=0；带步骤字段即拒绝，避免借控制事件绕过预算
+    assert event(client, headers, "control_pause").status_code == 400
+    assert event(client, headers, "control_pause", 0).status_code == 200
+    assert event(client, headers, "control_guidance", 0).status_code == 200
+    assert (
+        event(client, headers, "control_cancel", 0, step_id="s1", tool_name="fetchTags").status_code
+        == 400
+    )
+    assert event(client, headers, steps=plan_steps()).status_code == 200
+    assert event(client, headers, "control_resume", 0).status_code == 400
+    assert event(client, headers, "control_resume", 1).status_code == 200
+    assert (
+        db_session.execute(text("SELECT count(*) FROM agent_run_events")).scalar_one() == 4
+    )
+    assert db_session.query(ToolCallLog).count() == 0
+
+
 def test_event_limit_cumulative_across_two_plans(client, db_session, actors):
     headers = auth(actors[0])
     assert create_run(client, headers).status_code == 200

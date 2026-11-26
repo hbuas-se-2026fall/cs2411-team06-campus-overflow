@@ -624,3 +624,122 @@ class McpCallLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+
+
+class AgentRunControl(Base):
+    """运行控制状态（T-21A / RC-R01）：每个运行一行，revision 单调递增用于跨实例 fencing。
+
+    不设外键：运行归档删除后控制行保留短期审计价值，由清理任务单独收敛。
+    """
+
+    __tablename__ = "agent_run_controls"
+
+    agent_run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # running / paused / cancelling / cancelled
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pause_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AgentRunCommand(Base):
+    """运行控制命令（T-21A / RC-R01～R03）：追加式，消费后清空引导正文只留摘要。"""
+
+    __tablename__ = "agent_run_commands"
+    __table_args__ = (
+        Index("ix_agent_run_commands_run_status", "agent_run_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    # pause / resume / cancel / guidance
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    guidance_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    guidance_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # pending / applied / expired
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    # 空表示系统自动命令（暂停超时），非空为管理员 id
+    requested_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class WorkflowSkill(Base):
+    """工作流 skill 定义（T-22A / SK-R01～R04）：团队共享知识，不构成授权依据。
+
+    发布通过 current_version 指向已发布版本；归档只改 status，不删除版本行，
+    保证历史运行对旧版本的引用仍可读（SK-R04）。
+    """
+
+    __tablename__ = "workflow_skills"
+    __table_args__ = (
+        Index("ix_workflow_skills_task_status", "task_type", "status"),
+        Index("ix_workflow_skills_course_id", "course_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # 任务类型：与 Agent 任务分类一致（如 moderation_scan / patrol_scan / chat）
+    task_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    # 课程限定；为空表示全局 skill
+    course_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("courses.id"), nullable=True
+    )
+    # draft / active / disabled / archived
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft", index=True
+    )
+    # 当前注入版本；草稿阶段为空，发布后指向 workflow_skill_versions.version
+    current_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WorkflowSkillVersion(Base):
+    """skill 版本内容（T-22A / SK-R02）：(skill_id, version) 唯一，运行读取固定版本。
+
+    content 只存适用条件、步骤、提示要点、检查清单与阈值；AI 提案为 draft，
+    管理员发布后置 published，历史 published 版本保留以支持回滚。
+    """
+
+    __tablename__ = "workflow_skill_versions"
+
+    skill_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("workflow_skills.id"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # conditions / steps / tips / checks / max_tokens
+    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # 提案来源运行；管理员手工新增为空
+    source_run_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    # draft / published
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    published_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )

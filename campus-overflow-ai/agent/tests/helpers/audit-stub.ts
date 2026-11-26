@@ -6,7 +6,8 @@ interface RunData {
   status: "running" | "succeeded" | "failed";
 }
 interface EventData {
-  event_type: "plan" | "step_started" | "step_succeeded" | "step_failed";
+  event_type: "plan" | "step_started" | "step_succeeded" | "step_failed"
+    | "control_pause" | "control_resume" | "control_cancel" | "control_guidance";
   plan_revision: number;
   steps?: { step_id: string; tool_name: string }[];
   step_id?: string; tool_name?: string; duration_ms?: number;

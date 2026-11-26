@@ -270,8 +270,12 @@ class AuditPlanStep(BaseModel):
 
 class RunEventCreateRequest(BaseModel):
     model_config = {"extra": "forbid"}
-    event_type: Literal["plan", "step_started", "step_succeeded", "step_failed"]
-    plan_revision: int = Field(..., ge=1, le=2)
+    event_type: Literal[
+        "plan", "step_started", "step_succeeded", "step_failed",
+        "control_pause", "control_resume", "control_cancel", "control_guidance",
+    ]
+    # 控制事件发生在计划之前时用 0；其余事件仍要求 1..2，由 domain 校验
+    plan_revision: int = Field(..., ge=0, le=2)
     steps: list[AuditPlanStep] | None = Field(None, max_length=8)
     step_id: str | None = Field(None, pattern=r"^s\d+$", max_length=20)
     tool_name: (
