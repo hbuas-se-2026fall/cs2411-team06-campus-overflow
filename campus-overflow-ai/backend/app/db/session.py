@@ -4,9 +4,22 @@ from collections.abc import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 
-engine = create_engine(settings.database_url, pool_pre_ping=True, pool_recycle=3600)
+
+def build_engine(config: Settings):
+    """按配置构建连接池；多 worker 时每个进程独立持有一份（ADR-012）。"""
+    return create_engine(
+        config.database_url,
+        pool_pre_ping=True,
+        pool_recycle=config.db_pool_recycle,
+        pool_size=config.db_pool_size,
+        max_overflow=config.db_pool_max_overflow,
+        pool_timeout=config.db_pool_timeout,
+    )
+
+
+engine = build_engine(settings)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

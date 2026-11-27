@@ -10,11 +10,12 @@ COPY app ./app
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} .
 
-# 迁移脚本与应用入口
+# 迁移脚本、入口脚本与应用入口
 COPY alembic.ini ./
 COPY alembic ./alembic
+COPY docker-entrypoint.sh ./
 
 EXPOSE 8000
 
-# 启动前先执行迁移（Alembic 保证表结构最新），再启动 API 服务
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# 入口按 CPU/内存计算 worker，先执行迁移再启动 API（ADR-012）
+CMD ["sh", "docker-entrypoint.sh"]

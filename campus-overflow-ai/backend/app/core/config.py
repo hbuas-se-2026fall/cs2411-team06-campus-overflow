@@ -1,5 +1,22 @@
 # 应用配置：环境变量优先，默认值仅用于本地开发
+from urllib.parse import unquote, urlsplit
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_JWT_SECRET = "dev-jwt-secret-change-in-production"
+
+
+def _database_password(url: str) -> str:
+    """取数据库连接里的密码；解析失败按空密码处理，交由生产态校验拒绝。"""
+    try:
+        netloc = urlsplit(url).netloc
+    except ValueError:
+        return ""
+    if "@" not in netloc:
+        return ""
+    userinfo = netloc.rsplit("@", 1)[0]
+    return unquote(userinfo.split(":", 1)[1]) if ":" in userinfo else ""
 
 
 class Settings(BaseSettings):
@@ -11,6 +28,11 @@ class Settings(BaseSettings):
 
     # MySQL 连接（同步 SQLAlchemy + PyMySQL）
     database_url: str = "mysql+pymysql://root:root@localhost:3306/campus_overflow?charset=utf8mb4"
+    # 连接池（ADR-012）：单 worker 容量；多 worker 总量 = workers × (pool_size + max_overflow)
+    db_pool_size: int = 10
+    db_pool_max_overflow: int = 10
+    db_pool_timeout: float = 5.0
+    db_pool_recycle: int = 1800
 
     # 服务间调用凭证（Agent 调用 /internal/agent/* 时校验，T-12 启用）
     agent_service_token: str = "dev-agent-token"
@@ -38,11 +60,26 @@ class Settings(BaseSettings):
     run_control_cleanup_interval_seconds: int = 60
 
     # JWT 认证配置
-    jwt_secret: str = "dev-jwt-secret-change-in-production"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440  # 24 小时
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="BACKEND_", extra="ignore")
+
+    @model_validator(mode="after")
+    def _enforce_production_secrets(self) -> "Settings":
+        """生产态密钥门禁：默认或过弱的密钥直接启动失败，避免伪造 JWT（ADR-012）。"""
+        if self.debug:
+            return self
+        problems: list[str] = []
+        if self.jwt_secret == DEFAULT_JWT_SECRET or len(self.jwt_secret.encode("utf-8")) < 32:
+            problems.append("BACKEND_JWT_SECRET 必须是非默认值且至少 32 字节")
+        password = _database_password(self.database_url)
+        if password in {"", "root"} or len(password) < 12:
+            problems.append("BACKEND_DATABASE_URL 必须使用非默认且至少 12 字符的数据库密码")
+        if problems:
+            raise ValueError("；".join(problems))
+        return self
 
 
 settings = Settings()
