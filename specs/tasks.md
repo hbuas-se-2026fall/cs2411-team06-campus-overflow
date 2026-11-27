@@ -24,6 +24,15 @@
 - [ ] T-22F 量化验收：新增 `bench:skill-reuse` 固定 20 条治理样本，关闭/开启对比；重复检索次数下降 ≥50%、输入 token 下降 ≥30%、成功率不降、P95 不劣化才允许默认开启。验收：对比报告入审查记录；未达标保持 `SKILL_INJECTION_ENABLED=false`。
 
 
+## 2026-11-27 运行时缺陷修复（T-23，R-003 已确认）
+
+依据：requirements/R-003、ADR-012。按 P0 → P1 顺序实施；未验证不得勾选。
+
+- [x] T-23B 生产密钥门禁（P0）：Compose 对 `MYSQL_ROOT_PASSWORD`、`BACKEND_JWT_SECRET` 使用必填语法；`Settings` 在 `debug=False` 时校验 JWT 非默认且 ≥32 字节、数据库密码非空/非 root 且 ≥12 字符，失败即启动失败；新增 `deploy/.env.prod.example`。验收：弱密钥/缺密钥启动失败，合法配置通过；pytest 覆盖四类配置。配置单测 4 项、ruff 通过；Compose 缺变量退出码 1、强配置退出码 0；待人工审查；见 `docs/审查记录/运行时缺陷修复/T-23B-生产密钥门禁.md`。
+- [x] T-23A 多 worker 与连接池（P1）：入口按 `min(4, CPU//2, 内存GB)` 计算 worker（`WEB_CONCURRENCY` 可覆盖），每 worker 池 10+10、`pool_timeout=5s`；连接池等待超时映射 503。验收：100 并发 60s 成功率 99.81%、P95 378.9ms、0 条 `QueuePool limit`；38 次池饱和均快速返回 503。单测 7 项、ruff、lint-imports 通过；见 `docs/审查记录/运行时缺陷修复/T-23A-连接池与多worker.md`。
+- [x] T-23C BFF 网关错误（P1）：上游超时普通接口 60s / 导出 300s；连接失败 502、超时 504，统一响应带 trace id 与 `retry-after`，消息脱敏。验收：BFF 专项 8 项、tsc、eslint 通过；断连实测 502，挂起单测 504，现有登录/401/CSV 用例无回归；见 `docs/审查记录/运行时缺陷修复/T-23C-BFF网关错误映射.md`。
+- [ ] T-23D 验收收口：三项冒烟与后端全量通过，CI 绿；`status.md` 与审查记录同步。
+
 ## 2026-11-24 计划内无依赖步骤并行（SA-07，R-001 已确认）
 
 依据：spec SA-R07、plan AX-R10、ADR-010、requirements/R-001。默认关闭，开启后仅并发行内无依赖的只读步骤；一个 job 仍占一个槽。未完成不得勾选。

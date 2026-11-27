@@ -143,4 +143,55 @@ describe("BFF /api/backend/**", () => {
     expect(headers.get("authorization")).toBeNull();
     expect(response.headers.get("set-cookie") ?? "").toContain("Max-Age=0");
   });
+
+  it("上游连接失败返回 502，消息脱敏并带 trace 与重试提示", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:65530");
+    }));
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/backend/api/health"),
+      context(["api", "health"]),
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      code: 502, data: null, message: "上游服务暂不可用，请稍后重试",
+    });
+    expect(response.headers.get("x-trace-id")).toBeTruthy();
+    expect(response.headers.get("retry-after")).toBe("5");
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("上游挂起超时返回 504", async () => {
+    vi.resetModules();
+    process.env.BACKEND_FETCH_TIMEOUT_MS = "5";
+    const { POST: post } = await import("./route");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn((_url: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        });
+      })));
+
+    try {
+      const response = await post(
+        new Request("http://localhost:3000/api/backend/api/health"),
+        context(["api", "health"]),
+      );
+
+      expect(response.status).toBe(504);
+      expect(await response.json()).toEqual({
+        code: 504, data: null, message: "上游服务响应超时，请稍后重试",
+      });
+      expect(response.headers.get("retry-after")).toBe("5");
+    } finally {
+      delete process.env.BACKEND_FETCH_TIMEOUT_MS;
+      errorSpy.mockRestore();
+      vi.resetModules();
+    }
+  });
 });

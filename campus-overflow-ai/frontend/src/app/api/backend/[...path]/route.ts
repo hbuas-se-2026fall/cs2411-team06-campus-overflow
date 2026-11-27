@@ -4,10 +4,30 @@ import type { BackendLoginResult } from "@/shared/types/auth";
 export const dynamic = "force-dynamic";
 
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN ?? "http://localhost:8000";
+// 上游超时放宽：普通接口 60s、导出接口 300s；扩容由多 worker/多线程承担（ADR-012）
+const FETCH_TIMEOUT_MS = Number(process.env.BACKEND_FETCH_TIMEOUT_MS ?? 60_000);
+const EXPORT_TIMEOUT_MS = Number(process.env.BACKEND_EXPORT_TIMEOUT_MS ?? 300_000);
 
 // 登录态用 HttpOnly Cookie 保存，前端组件不读取 token（见 前端服务需求文档 §3.3）
 const TOKEN_COOKIE = "co_token";
 const TOKEN_MAX_AGE = 60 * 60 * 24; // 24h，与后端 jwt_expire_minutes 对齐
+
+/** 导出类接口允许更长的上游耗时。 */
+function fetchTimeout(route: string): number {
+  return route.endsWith("/export") ? EXPORT_TIMEOUT_MS : FETCH_TIMEOUT_MS;
+}
+
+/** 网关错误：统一结构、带 trace 与重试提示，不暴露上游地址或异常细节。 */
+function gatewayError(status: 502 | 504, traceId: string): Response {
+  return Response.json(
+    {
+      code: status,
+      data: null,
+      message: status === 504 ? "上游服务响应超时，请稍后重试" : "上游服务暂不可用，请稍后重试",
+    },
+    { status, headers: { "x-trace-id": traceId, "retry-after": "5" } },
+  );
+}
 
 interface TokenReadResult {
   token: string | null;
@@ -67,18 +87,36 @@ async function proxy(
   const { token, malformed } = readToken(request);
   if (token) headers.set("authorization", `Bearer ${token}`);
   // 链路追踪：透传或生成 x-trace-id
-  headers.set("x-trace-id", request.headers.get("x-trace-id") ?? crypto.randomUUID());
+  const traceId = request.headers.get("x-trace-id") ?? crypto.randomUUID();
+  headers.set("x-trace-id", traceId);
 
   const body = ["GET", "HEAD"].includes(request.method)
     ? undefined
     : await request.text();
 
-  const resp = await fetch(target, {
-    method: request.method,
-    headers,
-    body,
-    cache: "no-store",
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(target, {
+      method: request.method,
+      headers,
+      body,
+      cache: "no-store",
+      signal: AbortSignal.timeout(fetchTimeout(route)),
+    });
+  } catch (error) {
+    // Node 的超时错误可能是 DOMException 而非 Error，不能只用 instanceof Error 判断
+    const errorName = typeof error === "object" && error !== null && "name" in error
+      ? String(error.name)
+      : "";
+    const isTimeout = errorName === "TimeoutError" || errorName === "AbortError";
+    console.error(JSON.stringify({
+      event: "bff_upstream_error",
+      trace_id: traceId,
+      route,
+      reason: isTimeout ? "timeout" : "network",
+    }));
+    return gatewayError(isTimeout ? 504 : 502, traceId);
+  }
 
   // 按字节透传：文件导出（如带 BOM 的 CSV）不会被文本解码破坏
   const bytes = await resp.arrayBuffer();
