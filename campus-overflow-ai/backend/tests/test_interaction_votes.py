@@ -203,6 +203,8 @@ def test_rank_window_stays_fixed_across_batches(db_session, monkeypatch, period,
         [(1, 5)] + [(user_id, -10) for user_id in range(101, 110)]
     )
     assert batches == [list(range(1, 101)), list(range(101, 111))]
+    # 榜单按 (period, course_id) 缓存 30s，模拟 TTL 过期后再取下一批
+    service.rank_cache.clear()
     later_items = service.rank(db_session, period, course_id).items
     assert [(item.user_id, item.score) for item in later_items] == (
         [(1, -5)] + [(user_id, -10) for user_id in range(101, 110)]
@@ -1005,6 +1007,8 @@ def test_window_rank_batch_names_order_and_missing_users(
     assert 99999 in calls[0]
     db_session.query(ReputationLog).filter(ReputationLog.user_id.in_(user_ids[1:])).delete()
     db_session.commit()
+    # 榜单按 (period, course_id) 缓存 30s，模拟 TTL 过期后再验证剩余条目
+    service.rank_cache.clear()
     remaining = service.rank(db_session, period, course_id).items
     assert [(item.user_id, item.score) for item in remaining] == [(user_ids[0], 0)]
 

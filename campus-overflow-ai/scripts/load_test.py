@@ -1,22 +1,21 @@
-"""固定并发压测：统计成功率、状态码分布、P50/P95/P99 与 RPS。
+"""固定并发压测（asyncio + HTTP keep-alive）：模拟真实浏览器连接复用。
 
 用法（在 campus-overflow-ai 目录）：
   uv run --project backend python scripts/load_test.py \
     --url http://127.0.0.1:8000/api/courses --token-file "$env:TEMP/bench_token.txt" \
-    --concurrency 100 --duration 60 --timeout 30
+    --concurrency 1000 --duration 60 --timeout 30 --warmup 3
 
-退出码：达到 --min-success-rate 与 --max-p95-ms 时为 0，否则为 1。
+每个 worker 复用一条 TCP 连接；响应解析 Content-Length 或 chunked。
+超时/连接异常时关闭并重连。退出码：达到阈值 0，否则 1。
 """
 
 import argparse
+import asyncio
 import math
 import statistics
-import threading
 import time
-import urllib.error
-import urllib.request
+import urllib.parse
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -28,43 +27,135 @@ def percentile(values: list[float], p: float) -> float:
     return ordered[index]
 
 
-def run(args: argparse.Namespace) -> int:
-    token = Path(args.token_file).read_text(encoding="utf-8").strip() if args.token_file else ""
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    deadline = time.perf_counter() + args.duration
-    lock = threading.Lock()
+class KeepAliveConnection:
+    """单条 keep-alive 连接：按 Content-Length / chunked 读完响应才能复用。"""
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._reader = reader
+        self._writer = writer
+        self.closed = False
+
+    @classmethod
+    async def open(cls, host: str, port: int, timeout: float) -> "KeepAliveConnection":
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+        return cls(reader, writer)
+
+    async def request(
+        self, host: str, path: str, authorization: str, timeout: float,
+    ) -> tuple[int, float]:
+        started = time.perf_counter()
+        lines = [
+            f"GET {path} HTTP/1.1",
+            f"Host: {host}",
+            "Connection: keep-alive",
+            "Accept: */*",
+        ]
+        if authorization:
+            lines.append(f"Authorization: {authorization}")
+        self._writer.write(("\r\n".join(lines) + "\r\n\r\n").encode("ascii"))
+        await asyncio.wait_for(self._writer.drain(), timeout)
+        status_line = await asyncio.wait_for(self._reader.readline(), timeout)
+        parts = status_line.split()
+        status = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+
+        headers: dict[str, str] = {}
+        while True:
+            line = await asyncio.wait_for(self._reader.readline(), timeout)
+            if line in (b"\r\n", b"\n", b""):
+                break
+            key, _, value = line.decode("latin-1").partition(":")
+            headers[key.strip().lower()] = value.strip()
+        if headers.get("connection", "").lower() == "close":
+            self.closed = True
+
+        self.closed = self.closed or await self._drain_body(headers, timeout)
+        return status, (time.perf_counter() - started) * 1000
+
+    async def _drain_body(self, headers: dict[str, str], timeout: float) -> bool:
+        """读完响应体；返回连接是否已不可复用。"""
+        if headers.get("transfer-encoding", "").lower() == "chunked":
+            while True:
+                size_line = await asyncio.wait_for(self._reader.readline(), timeout)
+                size = int(size_line.strip().split(b";")[0] or b"0", 16)
+                if size == 0:
+                    await asyncio.wait_for(self._reader.readline(), timeout)
+                    return False
+                await asyncio.wait_for(self._reader.readexactly(size), timeout)
+                await asyncio.wait_for(self._reader.readline(), timeout)
+        length = headers.get("content-length")
+        if length is not None:
+            await asyncio.wait_for(self._reader.readexactly(int(length)), timeout)
+            return False
+        # 无长度信息（如 204 或服务端关闭）：读到 EOF，连接不可复用
+        await asyncio.wait_for(self._reader.read(), timeout)
+        return True
+
+    def close(self) -> None:
+        self._writer.close()
+        self.closed = True
+
+
+async def worker(
+    host: str, port: int, path: str, authorization: str, timeout: float, deadline: float,
+    latencies: list[float], statuses: Counter[int], errors: Counter[str], reconnects: Counter[int],
+) -> None:
+    connection: KeepAliveConnection | None = None
+    while time.perf_counter() < deadline:
+        try:
+            if connection is None:
+                connection = await KeepAliveConnection.open(host, port, timeout)
+                reconnects[1] += 1
+            status, elapsed = await connection.request(host, path, authorization, timeout)
+            statuses[status] += 1
+            latencies.append(elapsed)
+        except asyncio.TimeoutError:
+            errors["TimeoutError"] += 1
+            if connection is not None:
+                connection.close()
+            connection = None
+        except Exception as exc:  # noqa: BLE001 - 压测需要统计所有客户端失败
+            errors[type(exc).__name__] += 1
+            if connection is not None:
+                connection.close()
+            connection = None
+        if connection is not None and connection.closed:
+            connection.close()
+            connection = None
+    if connection is not None:
+        connection.close()
+
+
+async def run_load(args: argparse.Namespace) -> int:
+    parsed = urllib.parse.urlsplit(args.url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    authorization = ""
+    if args.token_file:
+        authorization = f"Bearer {Path(args.token_file).read_text(encoding='utf-8').strip()}"
+
     latencies: list[float] = []
     statuses: Counter[int] = Counter()
     errors: Counter[str] = Counter()
+    reconnects: Counter[int] = Counter()
 
-    def worker() -> None:
-        while time.perf_counter() < deadline:
-            started = time.perf_counter()
-            status = 0
-            try:
-                request = urllib.request.Request(args.url, headers=headers)
-                with urllib.request.urlopen(request, timeout=args.timeout) as response:
-                    response.read()
-                    status = response.status
-            except urllib.error.HTTPError as exc:
-                status = exc.code
-                try:
-                    exc.read()
-                except OSError:
-                    pass
-            except Exception as exc:  # noqa: BLE001 - 压测脚本需要统计所有客户端失败
-                status = 0
-                with lock:
-                    errors[type(exc).__name__] += 1
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            with lock:
-                statuses[status] += 1
-                latencies.append(elapsed_ms)
+    if args.warmup > 0:
+        warmup_deadline = time.perf_counter() + args.warmup
+        await asyncio.gather(*(
+            worker(host, port, path, authorization, args.timeout, warmup_deadline,
+                   [], Counter(), Counter(), Counter())
+            for _ in range(min(args.concurrency, 50))
+        ))
 
+    deadline = time.perf_counter() + args.duration
     started_at = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        for _ in range(args.concurrency):
-            pool.submit(worker)
+    await asyncio.gather(*(
+        worker(host, port, path, authorization, args.timeout, deadline,
+               latencies, statuses, errors, reconnects)
+        for _ in range(args.concurrency)
+    ))
     elapsed = time.perf_counter() - started_at
 
     total = len(latencies)
@@ -72,7 +163,10 @@ def run(args: argparse.Namespace) -> int:
     success_rate = success / total * 100 if total else 0.0
     p95 = percentile(latencies, 95)
     print(f"url={args.url}")
-    print(f"concurrency={args.concurrency} duration={elapsed:.1f}s total={total} rps={total / elapsed:.1f}")
+    print(
+        f"concurrency={args.concurrency} duration={elapsed:.1f}s total={total} "
+        f"rps={total / elapsed:.1f} reconnects={reconnects[1]}"
+    )
     print(f"success={success} success_rate={success_rate:.2f}%")
     print(
         "latency_ms "
@@ -89,15 +183,16 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="固定并发 HTTP 压测")
+    parser = argparse.ArgumentParser(description="固定并发 HTTP 压测（keep-alive）")
     parser.add_argument("--url", required=True)
     parser.add_argument("--token-file", default="")
     parser.add_argument("--concurrency", type=int, default=100)
     parser.add_argument("--duration", type=int, default=60, help="持续秒数")
     parser.add_argument("--timeout", type=float, default=30.0, help="单请求超时秒数")
+    parser.add_argument("--warmup", type=int, default=0, help="预热秒数（不计入统计）")
     parser.add_argument("--min-success-rate", type=float, default=0.0)
     parser.add_argument("--max-p95-ms", type=float, default=0.0, help="0 表示不校验")
-    return run(parser.parse_args())
+    return asyncio.run(run_load(parser.parse_args()))
 
 
 if __name__ == "__main__":

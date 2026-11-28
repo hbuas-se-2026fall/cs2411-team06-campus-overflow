@@ -89,7 +89,7 @@
 
 ## 9. 已确认决策（2026-11-27）
 
-1. 后端使用多 worker，按 CPU 与内存分配：`workers = min(4, CPU//2, 内存GB)`，至少 1，`WEB_CONCURRENCY` 可覆盖；每 worker 连接池 10+10。
+1. 后端使用多 worker，启动时探测真实 CPU/内存，并结合数据库连接预算：`workers = max(1, min(CPU, 内存GB, DB_CONNECTION_BUDGET // 20))`，`DB_CONNECTION_BUDGET` 默认 100，`WEB_CONCURRENCY` 可覆盖；每 worker 连接池 10+10（ADR-013）。
 2. 非 root 数据库账号不是本期必须项；但必须阻断伪造 JWT：生产启动校验强密钥，Compose 缺变量即失败。
 3. BFF 保留超时但放宽：普通接口 60s、导出接口 300s，并通过多 worker/多线程扩容避免正常请求超时；只有真实挂起返回 504。
 4. 压测口径确认：100 并发、持续 60s、成功率 ≥99%、P95 ≤1.5s、0 条连接池超限。

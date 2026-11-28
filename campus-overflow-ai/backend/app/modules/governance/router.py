@@ -103,6 +103,16 @@ def resolve_appeal(
     return ok(appeal.model_dump(), "申诉复核完成")
 
 
+@appeals_router.get("/eligibility")
+def appeal_eligibility(
+    # 与提交一致：封禁用户也可查询自己的申诉资格
+    current_user: UserPrincipal = Depends(get_current_user_allow_banned),
+    db: Session = Depends(get_db),
+) -> dict:
+    """当前用户申诉资格预检（只读）。"""
+    return ok(service_admin.get_appeal_eligibility(db, current_user.id), "success")
+
+
 @appeals_router.post("")
 def submit_appeal(
     req: AppealCreateRequest,

@@ -3,6 +3,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
+from anyio import to_thread
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -38,7 +39,9 @@ from app.modules.qa.router_internal import user_router as qa_internal_user_route
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """暂停超时定时清理（T-21D）：开关关闭时不启动，行为与现状一致。"""
+    """启动期设置 anyio 同步线程配额，再按需启动暂停超时定时清理（T-21D）。"""
+    # 同步 SQLAlchemy 依赖走 anyio 默认线程池；仅在事件循环内设置，避免 worker 间互相覆盖
+    to_thread.current_default_thread_limiter().total_tokens = settings.threadpool_tokens
     cleanup_task: asyncio.Task[None] | None = None
     if settings.run_control_enabled and settings.run_control_cleanup_interval_seconds > 0:
         cleanup_task = asyncio.create_task(run_control_cleanup_loop())

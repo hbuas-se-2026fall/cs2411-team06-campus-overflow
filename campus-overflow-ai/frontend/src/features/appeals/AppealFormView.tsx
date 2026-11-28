@@ -4,7 +4,7 @@
 // 封禁信息回显自 session me（后端 UserResponse 仅含 status/ban_reason，封禁时间字段后端暂无，
 // 二期补充后回显）；申诉理由 ≥30 字校验 + 计数；提交走 T-15 的 POST /api/appeals，
 // 网络/5xx 失败统一兜底文案，失败不清空已输入内容
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -17,6 +17,14 @@ const REASON_MIN = 30;
 const APPEAL_UNAVAILABLE = "提交失败，请稍后重试";
 // 成功后停留片刻展示 Toast，再跳通知中心（§2.15：成功 Toast → /notifications）
 const REDIRECT_DELAY_MS = 1500;
+
+// 后端申诉资格预检（与 POST /api/appeals 同一套规则）：
+// ok=可申诉；pending=已有待处理申诉；no_case=没有已执行的处置工单。
+interface AppealEligibility {
+  can_appeal: boolean;
+  case_id: number | null;
+  reason: "ok" | "pending" | "no_case";
+}
 
 // 封禁到期时间（T-15-D）：后端 banned_until 为 ISO 串；展示到分钟即可
 function formatDeadline(value: string): string {
@@ -43,6 +51,23 @@ export function AppealFormView() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [eligibility, setEligibility] = useState<AppealEligibility | null>(null);
+  const [eligibilityFailed, setEligibilityFailed] = useState(false);
+
+  useEffect(() => {
+    if (sessionStatus !== "authed" || me === null) return;
+    let cancelled = false;
+    apiFetch<AppealEligibility>("/appeals/eligibility")
+      .then((data) => {
+        if (!cancelled) setEligibility(data);
+      })
+      .catch(() => {
+        if (!cancelled) setEligibilityFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionStatus, me]);
 
   if (sessionStatus === "loading") {
     return <LoadingSkeleton variant="detail" count={2} />;
@@ -51,12 +76,28 @@ export function AppealFormView() {
     // middleware 已守卫登录，此分支为会话探测失败（401 等）的兜底
     return <EmptyState title="登录状态已失效" description="请重新登录后再提交申诉。" />;
   }
-  if (me.status !== "banned") {
+  if (eligibilityFailed) {
+    return (
+      <EmptyState
+        title="暂时无法确认申诉资格"
+        description="请稍后刷新页面重试；如持续失败，请联系管理员。"
+      />
+    );
+  }
+  if (eligibility === null) {
+    return <LoadingSkeleton variant="detail" count={2} />;
+  }
+  if (!eligibility.can_appeal) {
+    const isPending = eligibility.reason === "pending";
     return (
       <div className="flex flex-col gap-3">
         <EmptyState
-          title="你的账号状态正常，无需申诉"
-          description="只有处于封禁状态的账号才能发起申诉。"
+          title={isPending ? "你已有待处理的申诉" : "当前没有可申诉的处置记录"}
+          description={
+            isPending
+              ? "管理员复核后会通过通知告知结果，请勿重复提交。"
+              : "只有存在已执行的处置工单时才能发起申诉。"
+          }
         />
         <Link
           href="/"
@@ -102,28 +143,36 @@ export function AppealFormView() {
         <Toast tone="success" message={successToast} onClose={() => setSuccessToast(null)} />
       ) : null}
 
-      <Card>
-        <dl className="flex flex-col gap-2 text-[14px]">
-          <div className="flex gap-2">
-            <dt className="shrink-0 text-ink-subtle">账号状态</dt>
-            <dd className="font-medium text-danger-ink">已封禁</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="shrink-0 text-ink-subtle">封禁原因</dt>
-            <dd className="text-ink">{me.ban_reason ?? "未记录封禁原因"}</dd>
-          </div>
-          {me.banned_until !== undefined ? (
+      {me.status === "banned" ? (
+        <Card>
+          <dl className="flex flex-col gap-2 text-[14px]">
             <div className="flex gap-2">
-              <dt className="shrink-0 text-ink-subtle">
-                {me.banned_until ? "封禁至" : "封禁期限"}
-              </dt>
-              <dd className="text-ink">
-                {me.banned_until ? formatDeadline(me.banned_until) : "永久封禁"}
-              </dd>
+              <dt className="shrink-0 text-ink-subtle">账号状态</dt>
+              <dd className="font-medium text-danger-ink">已封禁</dd>
             </div>
-          ) : null}
-        </dl>
-      </Card>
+            <div className="flex gap-2">
+              <dt className="shrink-0 text-ink-subtle">封禁原因</dt>
+              <dd className="text-ink">{me.ban_reason ?? "未记录封禁原因"}</dd>
+            </div>
+            {me.banned_until !== undefined ? (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-ink-subtle">
+                  {me.banned_until ? "封禁至" : "封禁期限"}
+                </dt>
+                <dd className="text-ink">
+                  {me.banned_until ? formatDeadline(me.banned_until) : "永久封禁"}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+        </Card>
+      ) : (
+        <Card>
+          <p className="text-[14px] text-ink">
+            本次申诉关联最近一次内容处置（工单 #{eligibility.case_id}）。
+          </p>
+        </Card>
+      )}
 
       <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
         <div>
@@ -131,7 +180,7 @@ export function AppealFormView() {
             label="申诉理由"
             value={reason}
             rows={6}
-            placeholder="请说明你认为封禁有误的原因、相关背景与诉求（不少于 30 字）…"
+            placeholder="请说明你认为处置有误的原因、相关背景与诉求（不少于 30 字）…"
             error={reasonError ?? undefined}
             onChange={(event) => {
               setReason(event.target.value);

@@ -7,6 +7,8 @@ from datetime import date
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.cache import TTLCache
+from app.core.config import settings
 from app.modules.courses import domain, repository
 from app.modules.courses.schemas import (
     CourseAggregatesResponse,
@@ -22,6 +24,11 @@ from app.modules.courses.schemas import (
     WeeklyReportResponse,
 )
 from app.modules.identity import service as identity_service
+
+# 课程列表共享缓存：只存核心只读数据（课程/成员数/总数/教师名），joined 每次实时查询
+course_list_cache: TTLCache = TTLCache(
+    ttl_seconds=settings.course_cache_ttl_seconds, max_entries=256
+)
 
 
 def get_course(db: Session, course_id: int) -> CourseResponse | None:
@@ -102,6 +109,18 @@ def update_course(
     return updated
 
 
+def _load_course_list_core(
+    db: Session, page: int, page_size: int, keyword: str | None, semester: str | None,
+    mine: bool, viewer_id: int | None,
+) -> tuple[list[CourseResponse], dict[int, int], int, dict[int, str]]:
+    """课程列表核心只读数据：课程/成员数/总数/教师名（可进缓存，无用户态）。"""
+    courses, counts, total = repository.list_courses(
+        db, page, page_size, keyword, semester, mine, viewer_id
+    )
+    names = identity_service.get_usernames_by_ids(db, [c.teacher_id for c in courses])
+    return courses, counts, total, names
+
+
 def list_courses(
     db: Session, page: int, page_size: int, keyword: str | None, semester: str | None,
     mine: bool = False, viewer_id: int | None = None,
@@ -109,11 +128,20 @@ def list_courses(
     """课程列表：教师名跨模块批量取（一次 in 查询），成员数一次 GROUP BY。
 
     mine=true 只返回当前用户负责的课程（教师端"我的课程"）；joined 批量判定当前用户加入态。
+    共享缓存只覆盖非 mine 查询；mine 结果按查看者区分，避免串数据，joined 不缓存。
     """
-    courses, counts, total = repository.list_courses(
-        db, page, page_size, keyword, semester, mine, viewer_id
-    )
-    names = identity_service.get_usernames_by_ids(db, [c.teacher_id for c in courses])
+    if mine and viewer_id is not None:
+        courses, counts, total, names = _load_course_list_core(
+            db, page, page_size, keyword, semester, mine, viewer_id
+        )
+    else:
+        key = ("courses", page, page_size, keyword or "", semester or "")
+        courses, counts, total, names = course_list_cache.get_or_set(
+            key,
+            lambda: _load_course_list_core(
+                db, page, page_size, keyword, semester, mine, viewer_id
+            ),
+        )
     joined_ids = repository.member_course_ids(db, viewer_id, [c.id for c in courses])
     items = [
         CourseListItemResponse(

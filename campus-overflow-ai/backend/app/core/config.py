@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     db_pool_timeout: float = 5.0
     db_pool_recycle: int = 1800
 
+    # 进程内只读 TTL 缓存（多 worker 各自独立，仅降低热点读库压力）
+    course_cache_ttl_seconds: int = 30
+    tag_cache_ttl_seconds: int = 30
+    rank_cache_ttl_seconds: int = 30
+    # anyio 同步依赖线程配额：默认 40 在多 worker 高并发下易饱和
+    threadpool_tokens: int = 200
+
     # 服务间调用凭证（Agent 调用 /internal/agent/* 时校验，T-12 启用）
     agent_service_token: str = "dev-agent-token"
     # JSON：[{key_hash: SHA256, user_id: 管理员ID, enabled: true}]；无默认授权。

@@ -105,6 +105,10 @@ logs/
 campus-overflow-ai/frontend copy/
 **/* copy/
 
+# ---------- 外部测试反馈（只读审阅材料，不入库） ----------
+z_测试反馈/
+z_测试报告/
+
 # ---------- 说明 ----------
 # - uv.lock / package-lock.json 是锁文件，必须提交，勿加入忽略
 # - alembic/versions/ 迁移脚本必须提交，勿忽略
