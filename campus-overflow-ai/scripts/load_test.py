@@ -96,18 +96,23 @@ class KeepAliveConnection:
 
 
 async def worker(
-    host: str, port: int, path: str, authorization: str, timeout: float, deadline: float,
-    latencies: list[float], statuses: Counter[int], errors: Counter[str], reconnects: Counter[int],
+    host: str, port: int, targets: list[str], authorization: str, timeout: float, deadline: float,
+    latencies: list[float], latencies_by_target: dict[str, list[float]],
+    statuses: Counter[int], errors: Counter[str], reconnects: Counter[int],
 ) -> None:
     connection: KeepAliveConnection | None = None
+    index = 0
     while time.perf_counter() < deadline:
         try:
             if connection is None:
                 connection = await KeepAliveConnection.open(host, port, timeout)
                 reconnects[1] += 1
-            status, elapsed = await connection.request(host, path, authorization, timeout)
+            target = targets[index % len(targets)]
+            index += 1
+            status, elapsed = await connection.request(host, target, authorization, timeout)
             statuses[status] += 1
             latencies.append(elapsed)
+            latencies_by_target[target].append(elapsed)
         except asyncio.TimeoutError:
             errors["TimeoutError"] += 1
             if connection is not None:
@@ -132,11 +137,13 @@ async def run_load(args: argparse.Namespace) -> int:
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
+    targets = [item.strip() for item in (args.paths or path).split(",") if item.strip()]
     authorization = ""
     if args.token_file:
         authorization = f"Bearer {Path(args.token_file).read_text(encoding='utf-8').strip()}"
 
     latencies: list[float] = []
+    latencies_by_target: dict[str, list[float]] = {target: [] for target in targets}
     statuses: Counter[int] = Counter()
     errors: Counter[str] = Counter()
     reconnects: Counter[int] = Counter()
@@ -144,16 +151,16 @@ async def run_load(args: argparse.Namespace) -> int:
     if args.warmup > 0:
         warmup_deadline = time.perf_counter() + args.warmup
         await asyncio.gather(*(
-            worker(host, port, path, authorization, args.timeout, warmup_deadline,
-                   [], Counter(), Counter(), Counter())
+            worker(host, port, targets, authorization, args.timeout, warmup_deadline,
+                   [], {target: [] for target in targets}, Counter(), Counter(), Counter())
             for _ in range(min(args.concurrency, 50))
         ))
 
     deadline = time.perf_counter() + args.duration
     started_at = time.perf_counter()
     await asyncio.gather(*(
-        worker(host, port, path, authorization, args.timeout, deadline,
-               latencies, statuses, errors, reconnects)
+        worker(host, port, targets, authorization, args.timeout, deadline,
+               latencies, latencies_by_target, statuses, errors, reconnects)
         for _ in range(args.concurrency)
     ))
     elapsed = time.perf_counter() - started_at
@@ -177,6 +184,13 @@ async def run_load(args: argparse.Namespace) -> int:
     print("statuses=" + ", ".join(f"{status or 'network_error'}:{count}" for status, count in sorted(statuses.items())))
     if errors:
         print("errors=" + ", ".join(f"{name}:{count}" for name, count in errors.most_common()))
+    if len(targets) > 1:
+        for target in targets:
+            values = latencies_by_target[target]
+            print(
+                f"target={target} total={len(values)} "
+                f"p50={percentile(values, 50):.1f} p95={percentile(values, 95):.1f}"
+            )
 
     failed = success_rate < args.min_success_rate or (args.max_p95_ms > 0 and p95 > args.max_p95_ms)
     return 1 if failed else 0
@@ -185,6 +199,7 @@ async def run_load(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="固定并发 HTTP 压测（keep-alive）")
     parser.add_argument("--url", required=True)
+    parser.add_argument("--paths", default="", help="逗号分隔的混合路径，如 /api/courses,/api/questions")
     parser.add_argument("--token-file", default="")
     parser.add_argument("--concurrency", type=int, default=100)
     parser.add_argument("--duration", type=int, default=60, help="持续秒数")
