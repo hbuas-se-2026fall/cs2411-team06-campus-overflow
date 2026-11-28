@@ -53,6 +53,7 @@ export function AppealFormView() {
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const [eligibility, setEligibility] = useState<AppealEligibility | null>(null);
   const [eligibilityFailed, setEligibilityFailed] = useState(false);
+  const [eligibilityAttempt, setEligibilityAttempt] = useState(0);
 
   useEffect(() => {
     if (sessionStatus !== "authed" || me === null) return;
@@ -67,7 +68,7 @@ export function AppealFormView() {
     return () => {
       cancelled = true;
     };
-  }, [sessionStatus, me]);
+  }, [sessionStatus, me, eligibilityAttempt]);
 
   if (sessionStatus === "loading") {
     return <LoadingSkeleton variant="detail" count={2} />;
@@ -78,10 +79,30 @@ export function AppealFormView() {
   }
   if (eligibilityFailed) {
     return (
-      <EmptyState
-        title="暂时无法确认申诉资格"
-        description="请稍后刷新页面重试；如持续失败，请联系管理员。"
-      />
+      <div className="flex flex-col gap-3">
+        <EmptyState
+          title="暂时无法确认申诉资格"
+          description="请稍后重试；如持续失败，请联系管理员。"
+        />
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setEligibilityFailed(false);
+              setEligibility(null);
+              setEligibilityAttempt((value) => value + 1);
+            }}
+          >
+            重新加载
+          </Button>
+          <Link
+            href="/"
+            className="co-focusable text-[13px] text-ink-muted underline-offset-2 transition-colors duration-150 ease-standard hover:text-ink hover:underline"
+          >
+            返回首页
+          </Link>
+        </div>
+      </div>
     );
   }
   if (eligibility === null) {
@@ -111,6 +132,8 @@ export function AppealFormView() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    // 双保险：按钮 loading 之外再拦一次，防止连点/回车重复提交
+    if (isSubmitting) return;
     const nextReasonError = validateReason(reason);
     setReasonError(nextReasonError);
     setSubmitError(null);

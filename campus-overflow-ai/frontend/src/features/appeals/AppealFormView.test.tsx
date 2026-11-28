@@ -167,6 +167,25 @@ describe("AppealFormView", () => {
     expect(await screen.findByText("申诉理由包含违规内容")).toBeTruthy();
   });
 
+  it("资格预检失败可重新加载，恢复后展示表单", async () => {
+    setMe({ username: "alice", role: "student", status: "active", ban_reason: null });
+    let eligibilityCalls = 0;
+    mocks.apiFetch.mockImplementation((path: string) => {
+      if (path === "/appeals/eligibility") {
+        eligibilityCalls += 1;
+        return eligibilityCalls === 1
+          ? Promise.reject(new Error("offline"))
+          : Promise.resolve({ can_appeal: true, case_id: 1, reason: "ok" });
+      }
+      return Promise.resolve({});
+    });
+    render(<AppealFormView />);
+
+    expect(await screen.findByText("暂时无法确认申诉资格")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
+    expect(await screen.findByLabelText("申诉理由")).toBeTruthy();
+  });
+
   it("提交成功：以蛇形负载调用接口，显示已提交提示后跳转通知中心", async () => {
     setMe({ username: "alice", role: "student", status: "banned", ban_reason: "违规发帖" });
     mocks.apiFetch.mockImplementation((path: string) =>

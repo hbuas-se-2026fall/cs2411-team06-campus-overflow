@@ -48,6 +48,7 @@
 - [x] T-24G BFF 上游 5xx 脱敏：5xx 不再透传正文，503 保留、其余 502，2xx 非 JSON 返回 502；新增 3 项测试，路由共 11 项、tsc/eslint 通过。见 `docs/审查记录/验收整改/R-004-第二轮反馈.md`。
 - [x] T-24H 多 worker 验收启动器：新增 `backend/scripts/serve.py`，按 CPU/连接预算启动 uvicorn；解决本机默认单 worker 导致混合压测失真。
 - [ ] T-24I 认证/投票复测：验收侧用新连接 + READ COMMITTED 重查，按 toggle 语义断言；代码侧 81 项已通过。
+- [x] T-24J 申诉页恢复能力：资格预检失败提供“重新加载/返回首页”，提交入口增加 `isSubmitting` 二次防重；组件 11 项、tsc/eslint 通过。浏览器全局走查仍待做。
 
 ## 2026-11-24 计划内无依赖步骤并行（SA-07，R-001 已确认）
 
