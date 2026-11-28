@@ -194,4 +194,59 @@ describe("BFF /api/backend/**", () => {
       vi.resetModules();
     }
   });
+
+  it("上游 503 JSON 转脱敏 503，不透传内部地址与密钥", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      Response.json({ code: 503, message: "upstream http://private:9000 secret=hidden" }, { status: 503 }),
+    ));
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/backend/api/health"),
+      context(["api", "health"]),
+    );
+
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body).toEqual({ code: 503, data: null, message: "上游服务暂不可用，请稍后重试" });
+    expect(JSON.stringify(body)).not.toContain("private:9000");
+    errorSpy.mockRestore();
+  });
+
+  it("上游 500 HTML 转 502 JSON，不透传堆栈与主机", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response("<html>traceback private-host secret=hidden</html>", {
+        status: 500,
+        headers: { "content-type": "text/html" },
+      }),
+    ));
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/backend/api/health"),
+      context(["api", "health"]),
+    );
+
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body).toEqual({ code: 502, data: null, message: "上游服务暂不可用，请稍后重试" });
+    expect(JSON.stringify(body)).not.toContain("private-host");
+    errorSpy.mockRestore();
+  });
+
+  it("上游 200 非 JSON 视为契约异常，返回 502 而不是透传纯文本", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response("upstream plain text", { status: 200, headers: { "content-type": "text/plain" } }),
+    ));
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/backend/api/health"),
+      context(["api", "health"]),
+    );
+
+    expect(response.status).toBe(502);
+    expect((await response.json()).code).toBe(502);
+    errorSpy.mockRestore();
+  });
 });

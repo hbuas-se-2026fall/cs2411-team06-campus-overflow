@@ -18,7 +18,7 @@ function fetchTimeout(route: string): number {
 }
 
 /** 网关错误：统一结构、带 trace 与重试提示，不暴露上游地址或异常细节。 */
-function gatewayError(status: 502 | 504, traceId: string): Response {
+function gatewayError(status: 502 | 503 | 504, traceId: string): Response {
   return Response.json(
     {
       code: status,
@@ -118,13 +118,45 @@ async function proxy(
     return gatewayError(isTimeout ? 504 : 502, traceId);
   }
 
+  const upstreamType = resp.headers.get("content-type") ?? "";
+  // 文件导出（如周报 CSV）：透传下载文件名，BFF 不解析文件内容
+  const disposition = resp.headers.get("content-disposition");
+
+  // 上游 5xx 不透传正文：HTML 堆栈或内部地址可能泄露主机、依赖与凭证线索
+  if (resp.status >= 500) {
+    await resp.body?.cancel();
+    console.error(JSON.stringify({
+      event: "bff_upstream_error",
+      trace_id: traceId,
+      route,
+      reason: "upstream_status",
+      upstream_status: resp.status,
+      upstream_type: upstreamType,
+    }));
+    return gatewayError(resp.status === 503 ? 503 : 502, traceId);
+  }
+
+  // 上游 2xx 非 JSON/非文件：视为契约异常，避免把纯文本错误页当成功响应
+  const isJson = upstreamType.toLowerCase().includes("json");
+  const isFile = Boolean(disposition) || route.endsWith("/export");
+  if (resp.ok && !isJson && !isFile) {
+    await resp.body?.cancel();
+    console.error(JSON.stringify({
+      event: "bff_upstream_error",
+      trace_id: traceId,
+      route,
+      reason: "unexpected_content_type",
+      upstream_status: resp.status,
+      upstream_type: upstreamType,
+    }));
+    return gatewayError(502, traceId);
+  }
+
   // 按字节透传：文件导出（如带 BOM 的 CSV）不会被文本解码破坏
   const bytes = await resp.arrayBuffer();
   const responseHeaders = new Headers({
-    "content-type": resp.headers.get("content-type") ?? "application/json",
+    "content-type": upstreamType || "application/json",
   });
-  // 文件导出（如周报 CSV）：透传下载文件名，BFF 不解析文件内容
-  const disposition = resp.headers.get("content-disposition");
   if (disposition) responseHeaders.set("content-disposition", disposition);
 
   // 损坏的 Cookie：清掉它，并按未登录继续返回后端结果
