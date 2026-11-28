@@ -3,6 +3,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from app.core.domain_error import DomainError
 from app.core.logging import action_logger
@@ -30,6 +31,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
         # 仅剩接口层依赖注入（core/permissions.py）与占位路由会抛 HTTPException
         return _error_response(exc.status_code, str(exc.detail))
+
+    @app.exception_handler(PoolTimeoutError)
+    async def pool_timeout_handler(request: Request, _exc: PoolTimeoutError) -> JSONResponse:
+        # 连接池等待超时：快速失败为 503，避免请求挂到客户端超时（ADR-012）
+        trace_id = request.headers.get("x-trace-id", "")
+        action_logger.warning("数据库连接池等待超时 trace_id=%s", trace_id)
+        return _error_response(503, "服务繁忙，请稍后重试", "db_pool_timeout")
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(

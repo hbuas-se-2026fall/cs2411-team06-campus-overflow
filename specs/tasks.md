@@ -24,6 +24,32 @@
 - [ ] T-22F 量化验收：新增 `bench:skill-reuse` 固定 20 条治理样本，关闭/开启对比；重复检索次数下降 ≥50%、输入 token 下降 ≥30%、成功率不降、P95 不劣化才允许默认开启。验收：对比报告入审查记录；未达标保持 `SKILL_INJECTION_ENABLED=false`。
 
 
+## 2026-11-27 运行时缺陷修复（T-23，R-003 已确认）
+
+依据：requirements/R-003、ADR-012。按 P0 → P1 顺序实施；未验证不得勾选。
+
+- [x] T-23B 生产密钥门禁（P0）：Compose 对 `MYSQL_ROOT_PASSWORD`、`BACKEND_JWT_SECRET` 使用必填语法；`Settings` 在 `debug=False` 时校验 JWT 非默认且 ≥32 字节、数据库密码非空/非 root 且 ≥12 字符，失败即启动失败；新增 `deploy/.env.prod.example`。验收：弱密钥/缺密钥启动失败，合法配置通过；pytest 覆盖四类配置。配置单测 4 项、ruff 通过；Compose 缺变量退出码 1、强配置退出码 0；待人工审查；见 `docs/审查记录/运行时缺陷修复/T-23B-生产密钥门禁.md`。
+- [x] T-23A 多 worker 与连接池（P1）：入口运行时探测 CPU/内存，按 `min(CPU, 内存GB, DB_CONNECTION_BUDGET//20)` 计算 worker（`WEB_CONCURRENCY` 可覆盖），每 worker 池 10+10、`pool_timeout=5s`；连接池等待超时映射 503。验收：100 并发 60s 成功率 99.81%、P95 378.9ms、0 条 `QueuePool limit`；38 次池饱和均快速返回 503。worker 计算单测 4 项、池单测 3 项、ruff、lint-imports 通过；见 `docs/审查记录/运行时缺陷修复/T-23A-连接池与多worker.md`。
+- [x] T-23C BFF 网关错误（P1）：上游超时普通接口 60s / 导出 300s；连接失败 502、超时 504，统一响应带 trace id 与 `retry-after`，消息脱敏。验收：BFF 专项 8 项、tsc、eslint 通过；断连实测 502，挂起单测 504，现有登录/401/CSV 用例无回归；见 `docs/审查记录/运行时缺陷修复/T-23C-BFF网关错误映射.md`。
+- [x] T-23E 高并发容量评估：1000/10000 并发压测定位同步栈边界。1000 并发成功率 14.28%（2647 次 503、408 次超时）；10000 并发全部失败（16119 次连接拒绝、2758 次超时）。结论：当前 5 worker × 20 连接不支持 1000+ 并发，需异步化、入口排队与水平扩容；已记入 `docs/审查记录/运行时缺陷修复/T-23E-高并发容量评估.md`。
+- [x] T-23F 入口保护与热点读缓存：Nginx `/api/` 每 IP 1000 连接、1000r/s burst 2000，`/internal` 拒绝，429/503 JSON；后端课程/标签/榜单 30s 进程内 TTL 缓存，anyio 线程 200/worker，uvicorn backlog 4096；压测脚本改为 keep-alive 并预热。验收：新增与相关测试 16+183 项、ruff、lint-imports、compose config 通过；100 并发 100%、P95 271.7ms；1000 并发 83.01%、P95 6.29s，仍差 99%/1s，下一步需减少数据库往返或异步化；见 `docs/审查记录/运行时缺陷修复/T-23F-入口保护与读缓存.md`。
+- [ ] T-23D 验收收口：三项冒烟与后端全量通过，CI 绿；`status.md` 与审查记录同步。当前缓存/线程池改动尚未跑后端全量。
+
+## 2026-11-28 验收反馈整改（R-004）
+
+依据：`z_测试反馈/acceptance-review/`、`specs/requirements/R-004-acceptance-remediation.md`、spec E-04/US-16。
+
+- [x] T-24A Phase 0 复验：认证落库与投票 toggle 用 81 项 pytest 证明正确；BUG-CERT/BUG-VOTE 重分类为测试口径误判，不改业务代码。见 `docs/审查记录/验收整改/R-004-Phase0.md`。
+- [x] T-24B 申诉入口对齐：新增 `GET /api/appeals/eligibility`，页面按“有可申诉工单”展示表单，不再只认 banned。验收：后端 9 项、前端 10 项、tsc/eslint 通过。
+- [x] T-24C 入口边界配置：`backend` 端口绑定改为 `127.0.0.1:${BACKEND_PORT}:8000`，公网只留 Nginx；`docker compose config` 退出码 0。运行时限流仍待目标环境验证。
+- [ ] T-24D 验收断言重跑：原 `tests/acceptance/` 脚本不在工作区，160 条全量重跑阻塞；需重建脚本或提供原脚本与测试账号。
+- [ ] T-24E 混合旅程 100 VU：登录后浏览/搜索/详情/投票/通知混合，稳态 ≥30 分钟，P95 ≤800ms、P99 ≤2s、错误率 <1%。
+- [ ] T-24F 部署错误说明：目标服务器升级/回滚/恢复操作清单；本机不执行部署。
+- [x] T-24G BFF 上游 5xx 脱敏：5xx 不再透传正文，503 保留、其余 502，2xx 非 JSON 返回 502；新增 3 项测试，路由共 11 项、tsc/eslint 通过。见 `docs/审查记录/验收整改/R-004-第二轮反馈.md`。
+- [x] T-24H 多 worker 验收启动器：新增 `backend/scripts/serve.py`，按 CPU/连接预算启动 uvicorn；解决本机默认单 worker 导致混合压测失真。
+- [ ] T-24I 认证/投票复测：验收侧用新连接 + READ COMMITTED 重查，按 toggle 语义断言；代码侧 81 项已通过。
+- [x] T-24J 申诉页恢复能力：资格预检失败提供“重新加载/返回首页”，提交入口增加 `isSubmitting` 二次防重；组件 11 项、tsc/eslint 通过。浏览器全局走查仍待做。
+
 ## 2026-11-24 计划内无依赖步骤并行（SA-07，R-001 已确认）
 
 依据：spec SA-R07、plan AX-R10、ADR-010、requirements/R-001。默认关闭，开启后仅并发行内无依赖的只读步骤；一个 job 仍占一个槽。未完成不得勾选。

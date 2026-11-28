@@ -94,6 +94,19 @@ def _find_appealable_case(db: Session, user_id: int):
     return None
 
 
+def get_appeal_eligibility(db: Session, user_id: int) -> dict:
+    """前端申诉页预检：是否可申诉、关联工单与不可申诉原因。
+
+    只读，不创建申诉；封禁用户与内容被处置用户走同一判定。
+    """
+    case = _find_appealable_case(db, user_id)
+    if case is None:
+        return {"can_appeal": False, "case_id": None, "reason": "no_case"}
+    if repository.has_pending_appeal(db, case.id, user_id):
+        return {"can_appeal": False, "case_id": case.id, "reason": "pending"}
+    return {"can_appeal": True, "case_id": case.id, "reason": "ok"}
+
+
 def submit_appeal(db: Session, user_id: int, reason: str) -> AppealOut:
     """学生提交申诉：自动定位最近被执行的处置工单，重复申诉拒绝。
 

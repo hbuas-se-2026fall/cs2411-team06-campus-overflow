@@ -45,6 +45,7 @@ describe("AppealFormView", () => {
   beforeEach(() => {
     mocks.session.status = "authed";
     mocks.session.me = null;
+    mocks.apiFetch.mockResolvedValue({ can_appeal: true, case_id: 1, reason: "ok" });
   });
 
   afterEach(() => {
@@ -52,13 +53,22 @@ describe("AppealFormView", () => {
     vi.clearAllMocks();
   });
 
-  it("未封禁用户访问：显示 EmptyState 与返回链接，不渲染申诉表单", async () => {
+  it("没有可申诉工单：显示 EmptyState 与返回链接，不渲染申诉表单", async () => {
+    setMe({ username: "alice", role: "student", status: "active", ban_reason: null });
+    mocks.apiFetch.mockResolvedValue({ can_appeal: false, case_id: null, reason: "no_case" });
+    render(<AppealFormView />);
+
+    expect(await screen.findByText("当前没有可申诉的处置记录")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "返回首页" }).getAttribute("href")).toBe("/");
+    expect(screen.queryByLabelText("申诉理由")).toBeNull();
+  });
+
+  it("账号未封禁但有可申诉内容处置：展示表单与关联工单", async () => {
     setMe({ username: "alice", role: "student", status: "active", ban_reason: null });
     render(<AppealFormView />);
 
-    expect(await screen.findByText("你的账号状态正常，无需申诉")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "返回首页" }).getAttribute("href")).toBe("/");
-    expect(screen.queryByLabelText("申诉理由")).toBeNull();
+    expect(await screen.findByLabelText("申诉理由")).toBeTruthy();
+    expect(screen.getByText(/工单 #1/)).toBeTruthy();
   });
 
   it("封禁态访问：回显卡显示封禁状态与原因，并渲染申诉表单", async () => {
@@ -115,12 +125,20 @@ describe("AppealFormView", () => {
     fireEvent.click(screen.getByRole("button", { name: "提交申诉" }));
 
     expect(screen.getByText(/申诉理由至少 30 字/)).toBeTruthy();
-    expect(mocks.apiFetch).not.toHaveBeenCalled();
+    expect(
+      mocks.apiFetch.mock.calls.some(
+        ([path, init]) => path === "/appeals" && (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
   it("提交失败（服务不可用）：显示兜底文案且保留已输入内容", async () => {
     setMe({ username: "alice", role: "student", status: "banned", ban_reason: "违规发帖" });
-    mocks.apiFetch.mockRejectedValue(new ApiError(501, "Not Implemented"));
+    mocks.apiFetch.mockImplementation((path: string) =>
+      path === "/appeals/eligibility"
+        ? Promise.resolve({ can_appeal: true, case_id: 1, reason: "ok" })
+        : Promise.reject(new ApiError(501, "Not Implemented")),
+    );
     render(<AppealFormView />);
 
     fireEvent.change(await screen.findByLabelText("申诉理由"), { target: { value: LONG_REASON } });
@@ -136,7 +154,11 @@ describe("AppealFormView", () => {
 
   it("提交被后端驳回（400）：透传后端中文原因而非兜底文案", async () => {
     setMe({ username: "alice", role: "student", status: "banned", ban_reason: "违规发帖" });
-    mocks.apiFetch.mockRejectedValue(new ApiError(400, "申诉理由包含违规内容"));
+    mocks.apiFetch.mockImplementation((path: string) =>
+      path === "/appeals/eligibility"
+        ? Promise.resolve({ can_appeal: true, case_id: 1, reason: "ok" })
+        : Promise.reject(new ApiError(400, "申诉理由包含违规内容")),
+    );
     render(<AppealFormView />);
 
     fireEvent.change(await screen.findByLabelText("申诉理由"), { target: { value: LONG_REASON } });
@@ -145,9 +167,32 @@ describe("AppealFormView", () => {
     expect(await screen.findByText("申诉理由包含违规内容")).toBeTruthy();
   });
 
+  it("资格预检失败可重新加载，恢复后展示表单", async () => {
+    setMe({ username: "alice", role: "student", status: "active", ban_reason: null });
+    let eligibilityCalls = 0;
+    mocks.apiFetch.mockImplementation((path: string) => {
+      if (path === "/appeals/eligibility") {
+        eligibilityCalls += 1;
+        return eligibilityCalls === 1
+          ? Promise.reject(new Error("offline"))
+          : Promise.resolve({ can_appeal: true, case_id: 1, reason: "ok" });
+      }
+      return Promise.resolve({});
+    });
+    render(<AppealFormView />);
+
+    expect(await screen.findByText("暂时无法确认申诉资格")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
+    expect(await screen.findByLabelText("申诉理由")).toBeTruthy();
+  });
+
   it("提交成功：以蛇形负载调用接口，显示已提交提示后跳转通知中心", async () => {
     setMe({ username: "alice", role: "student", status: "banned", ban_reason: "违规发帖" });
-    mocks.apiFetch.mockResolvedValue({ id: 1 });
+    mocks.apiFetch.mockImplementation((path: string) =>
+      path === "/appeals/eligibility"
+        ? Promise.resolve({ can_appeal: true, case_id: 1, reason: "ok" })
+        : Promise.resolve({ id: 1 }),
+    );
     render(<AppealFormView />);
 
     fireEvent.change(await screen.findByLabelText("申诉理由"), { target: { value: LONG_REASON } });

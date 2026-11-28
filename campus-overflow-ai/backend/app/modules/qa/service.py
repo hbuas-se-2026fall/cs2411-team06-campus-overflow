@@ -5,6 +5,8 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.core.cache import TTLCache
+from app.core.config import settings
 from app.modules.courses import domain as courses_domain
 from app.modules.courses import service as courses_service
 from app.modules.identity import domain as identity_domain
@@ -31,6 +33,11 @@ from app.modules.qa.schemas import (
     TagBrief,
     TagResponse,
     VoteTargetData,
+)
+
+# 标签列表缓存：只读聚合结果，写入路径不主动失效，最长滞后 TTL 秒
+tag_list_cache: TTLCache = TTLCache(
+    ttl_seconds=settings.tag_cache_ttl_seconds, max_entries=256
 )
 
 
@@ -595,7 +602,10 @@ def delete_comment(db: Session, user_role: str, user_id: int, comment_id: int) -
 
 def list_tags(db: Session, keyword: str | None, hot: bool) -> list[TagResponse]:
     """标签列表（US-03）：keyword 模糊筛名；hot=true 按绑定数降序取前 N（domain 常量）。"""
-    return repository.list_tags(db, keyword, hot)
+    key = (keyword or "", hot)
+    return tag_list_cache.get_or_set(
+        key, lambda: repository.list_tags(db, keyword, hot)
+    )
 
 
 def get_tag_detail(db: Session, tag_id: int) -> TagResponse:

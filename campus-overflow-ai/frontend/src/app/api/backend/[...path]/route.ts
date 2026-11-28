@@ -4,10 +4,30 @@ import type { BackendLoginResult } from "@/shared/types/auth";
 export const dynamic = "force-dynamic";
 
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN ?? "http://localhost:8000";
+// 上游超时放宽：普通接口 60s、导出接口 300s；扩容由多 worker/多线程承担（ADR-012）
+const FETCH_TIMEOUT_MS = Number(process.env.BACKEND_FETCH_TIMEOUT_MS ?? 60_000);
+const EXPORT_TIMEOUT_MS = Number(process.env.BACKEND_EXPORT_TIMEOUT_MS ?? 300_000);
 
 // 登录态用 HttpOnly Cookie 保存，前端组件不读取 token（见 前端服务需求文档 §3.3）
 const TOKEN_COOKIE = "co_token";
 const TOKEN_MAX_AGE = 60 * 60 * 24; // 24h，与后端 jwt_expire_minutes 对齐
+
+/** 导出类接口允许更长的上游耗时。 */
+function fetchTimeout(route: string): number {
+  return route.endsWith("/export") ? EXPORT_TIMEOUT_MS : FETCH_TIMEOUT_MS;
+}
+
+/** 网关错误：统一结构、带 trace 与重试提示，不暴露上游地址或异常细节。 */
+function gatewayError(status: 502 | 503 | 504, traceId: string): Response {
+  return Response.json(
+    {
+      code: status,
+      data: null,
+      message: status === 504 ? "上游服务响应超时，请稍后重试" : "上游服务暂不可用，请稍后重试",
+    },
+    { status, headers: { "x-trace-id": traceId, "retry-after": "5" } },
+  );
+}
 
 interface TokenReadResult {
   token: string | null;
@@ -67,26 +87,76 @@ async function proxy(
   const { token, malformed } = readToken(request);
   if (token) headers.set("authorization", `Bearer ${token}`);
   // 链路追踪：透传或生成 x-trace-id
-  headers.set("x-trace-id", request.headers.get("x-trace-id") ?? crypto.randomUUID());
+  const traceId = request.headers.get("x-trace-id") ?? crypto.randomUUID();
+  headers.set("x-trace-id", traceId);
 
   const body = ["GET", "HEAD"].includes(request.method)
     ? undefined
     : await request.text();
 
-  const resp = await fetch(target, {
-    method: request.method,
-    headers,
-    body,
-    cache: "no-store",
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(target, {
+      method: request.method,
+      headers,
+      body,
+      cache: "no-store",
+      signal: AbortSignal.timeout(fetchTimeout(route)),
+    });
+  } catch (error) {
+    // Node 的超时错误可能是 DOMException 而非 Error，不能只用 instanceof Error 判断
+    const errorName = typeof error === "object" && error !== null && "name" in error
+      ? String(error.name)
+      : "";
+    const isTimeout = errorName === "TimeoutError" || errorName === "AbortError";
+    console.error(JSON.stringify({
+      event: "bff_upstream_error",
+      trace_id: traceId,
+      route,
+      reason: isTimeout ? "timeout" : "network",
+    }));
+    return gatewayError(isTimeout ? 504 : 502, traceId);
+  }
+
+  const upstreamType = resp.headers.get("content-type") ?? "";
+  // 文件导出（如周报 CSV）：透传下载文件名，BFF 不解析文件内容
+  const disposition = resp.headers.get("content-disposition");
+
+  // 上游 5xx 不透传正文：HTML 堆栈或内部地址可能泄露主机、依赖与凭证线索
+  if (resp.status >= 500) {
+    await resp.body?.cancel();
+    console.error(JSON.stringify({
+      event: "bff_upstream_error",
+      trace_id: traceId,
+      route,
+      reason: "upstream_status",
+      upstream_status: resp.status,
+      upstream_type: upstreamType,
+    }));
+    return gatewayError(resp.status === 503 ? 503 : 502, traceId);
+  }
+
+  // 上游 2xx 非 JSON/非文件：视为契约异常，避免把纯文本错误页当成功响应
+  const isJson = upstreamType.toLowerCase().includes("json");
+  const isFile = Boolean(disposition) || route.endsWith("/export");
+  if (resp.ok && !isJson && !isFile) {
+    await resp.body?.cancel();
+    console.error(JSON.stringify({
+      event: "bff_upstream_error",
+      trace_id: traceId,
+      route,
+      reason: "unexpected_content_type",
+      upstream_status: resp.status,
+      upstream_type: upstreamType,
+    }));
+    return gatewayError(502, traceId);
+  }
 
   // 按字节透传：文件导出（如带 BOM 的 CSV）不会被文本解码破坏
   const bytes = await resp.arrayBuffer();
   const responseHeaders = new Headers({
-    "content-type": resp.headers.get("content-type") ?? "application/json",
+    "content-type": upstreamType || "application/json",
   });
-  // 文件导出（如周报 CSV）：透传下载文件名，BFF 不解析文件内容
-  const disposition = resp.headers.get("content-disposition");
   if (disposition) responseHeaders.set("content-disposition", disposition);
 
   // 损坏的 Cookie：清掉它，并按未登录继续返回后端结果

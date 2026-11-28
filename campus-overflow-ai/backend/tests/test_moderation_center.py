@@ -232,6 +232,18 @@ def test_appeal_auto_targets_recent_executed_case(
         == 200
     )
 
+    # 申诉资格预检：无关用户不可申诉，本人可申诉并给出关联工单
+    unrelated = client.get("/api/appeals/eligibility", headers=_auth(actors["student2"]))
+    assert unrelated.status_code == 200
+    assert unrelated.json()["data"] == {
+        "can_appeal": False, "case_id": None, "reason": "no_case",
+    }
+    eligible = client.get("/api/appeals/eligibility", headers=_auth(student))
+    assert eligible.status_code == 200
+    assert eligible.json()["data"] == {
+        "can_appeal": True, "case_id": case.id, "reason": "ok",
+    }
+
     # 理由不足 30 字 400
     resp = client.post(
         "/api/appeals", headers=_auth(student), json={"reason": "太短的理由"}
@@ -251,6 +263,12 @@ def test_appeal_auto_targets_recent_executed_case(
     appeal = resp.json()["data"]
     assert appeal["case_id"] == case.id
     assert appeal["status"] == "pending"
+
+    # 已有待处理申诉：预检返回 pending，页面不再展示表单
+    pending = client.get("/api/appeals/eligibility", headers=_auth(student))
+    assert pending.json()["data"] == {
+        "can_appeal": False, "case_id": case.id, "reason": "pending",
+    }
 
     # 同工单重复申诉 400
     resp = client.post("/api/appeals", headers=_auth(student), json={"reason": reason})

@@ -4,6 +4,8 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.core.cache import TTLCache
+from app.core.config import settings
 from app.modules.identity import service as identity_service
 from app.modules.interaction import domain, repository
 from app.modules.interaction.schemas import (
@@ -25,6 +27,11 @@ from app.modules.qa.schemas import (
     QuestionListItemResponse,
     VoteTargetData,
     normalize_created_range,
+)
+
+# 榜单缓存：按 (period, course_id) 缓存完整 RankResponse，写入路径不主动失效
+rank_cache: TTLCache = TTLCache(
+    ttl_seconds=settings.rank_cache_ttl_seconds, max_entries=64
 )
 
 
@@ -305,9 +312,16 @@ def public_reputation(db: Session, user_id: int) -> PublicReputationResponse:
 
 def rank(db: Session, period: str, course_id: int | None) -> RankResponse:
     """积分榜单（US-08/Q-04 无 Redis）：all 用总分列，week/month 聚合窗口内流水；
-    course 按流水课程快照过滤。非法 period → 400（domain）。
+    course 按流水课程快照过滤。非法 period → 400（domain）；结果按周期缓存 TTL 秒。
     """
     domain.ensure_rank_period(period)
+    return rank_cache.get_or_set(
+        (period, course_id), lambda: _build_rank(db, period, course_id)
+    )
+
+
+def _build_rank(db: Session, period: str, course_id: int | None) -> RankResponse:
+    """榜单真实计算（缓存未命中时执行）：聚合窗口与分页补齐逻辑不受缓存影响。"""
     if period == "all" and course_id is None:
         entries = identity_service.list_reputation_rank(db, domain.RANK_LIMIT)
         items = [

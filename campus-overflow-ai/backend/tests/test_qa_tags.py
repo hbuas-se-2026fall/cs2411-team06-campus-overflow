@@ -9,6 +9,7 @@ from app.core.security import hash_password
 from app.modules.identity.models import User
 from app.modules.qa import domain
 from app.modules.qa.models import Tag
+from app.modules.qa.service import tag_list_cache
 
 # 测试用户密码：进程内随机生成（避免源码硬编码凭据；创建与登录共用同一值）
 TEST_PASSWORD = secrets.token_urlsafe(12)
@@ -266,6 +267,8 @@ def test_tags_list_keyword_and_count(client: TestClient, db_session: Session):
     client.delete(
         f"/api/questions/{s['question_id']}", headers=_auth(s["asker_token"])
     )
+    # 标签列表按 TTL 缓存 30s，测试直接模拟缓存过期以验证软删后的计数口径
+    tag_list_cache.clear()
     items = client.get(
         "/api/tags", params={"keyword": "机器"}, headers=_auth(s["asker_token"])
     ).json()["data"]["items"]
